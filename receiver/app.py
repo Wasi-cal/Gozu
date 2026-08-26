@@ -7,36 +7,19 @@ fetch/log work happens asynchronously in the workflow/activity).
 """
 
 import asyncio
-import hashlib
-import hmac
 import logging
 import os
 import uuid
 
 from flask import Flask, jsonify, request
-from temporalio.client import Client
 
-from workflows import SonarToJiraWorkflow
+from receiver.verify_signature import verify_signature
+from receiver.starter import start_sonar_to_jira_workflow
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-
-TASK_QUEUE = "sonar-jira-queue"
-TEMPORAL_ADDRESS = "localhost:7233"
-
-
-def verify_signature(raw_body: bytes, signature_header: str, secret: str) -> bool:
-    """
-    SonarQube signs the raw request body with HMAC-SHA256 using the webhook
-    secret, and sends the hex digest in X-Sonar-Webhook-HMAC-SHA256.
-    """
-    if not signature_header:
-        return False
-
-    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature_header)
 
 
 @app.route("/webhooks/sonarqube", methods=["POST"])
@@ -61,25 +44,14 @@ def sonarqube_webhook():
     logger.info(f"Verified webhook for project_key={project_key} task_id={task_id}")
 
     try:
-        asyncio.run(start_workflow(project_key, task_id))
+        workflow_id = asyncio.run(start_sonar_to_jira_workflow(project_key, task_id))
     except Exception:
         logger.exception("Failed to start Temporal workflow")
         return jsonify({"error": "failed to start workflow"}), 500
 
-    return jsonify({"status": "accepted", "project_key": project_key, "task_id": task_id}), 200
-
-
-async def start_workflow(project_key: str, task_id: str):
-    client = await Client.connect(TEMPORAL_ADDRESS)
-    workflow_id = f"sonar-to-jira-{project_key}-{task_id}"
-
-    await client.start_workflow(
-        SonarToJiraWorkflow.run,
-        {"project_key": project_key, "task_id": task_id},
-        id=workflow_id,
-        task_queue=TASK_QUEUE,
-    )
     logger.info(f"Started workflow {workflow_id}")
+
+    return jsonify({"status": "accepted", "project_key": project_key, "task_id": task_id}), 200
 
 
 if __name__ == "__main__":

@@ -7,7 +7,8 @@ Temporal. Everything below runs locally and free.
 **Current scope:** webhook fires -> signature verified -> Temporal workflow
 starts -> an activity fetches real vulnerabilities/hotspots from local
 SonarQube -> a second activity creates a Jira ticket for each issue that
-doesn't already have one (dedupe via a label), skipping the rest.
+doesn't already have one (dedupe via a label), skipping the rest, and
+drops new tickets straight into the project's active sprint if one exists.
 
 ## Architecture
 
@@ -15,44 +16,52 @@ doesn't already have one (dedupe via a label), skipping the rest.
 SonarQube (Docker)
    |  webhook (HMAC-SHA256 signed)
    v
-receiver.py (Flask, :5001)
-   |  verifies signature, starts workflow
+receiver/app.py (Flask, :5001)
+   |  verifies signature (receiver/verify_signature.py),
+   |  starts workflow via receiver/starter.py
    v
 Temporal server (:7233)
    |
    v
-worker.py -> workflows.py (SonarToJiraWorkflow)
+temporal/worker.py -> temporal/workflows/sonar_to_jira.py (SonarToJiraWorkflow)
                   |
                   v
-             activities.py (fetch_vulnerabilities_activity)
+             temporal/activities/fetch_vulnerabilities.py
                   |
                   v
-             sonar_client.py (SonarClient interface)
+             sonar/interface.py (SonarClient interface)
                   |
         -------------------
         |                 |
- SonarQubeServerClient   SonarQubeCloudClient (stub, NotImplementedError)
+ sonar/server_client.py   sonar/cloud_client.py (stub, NotImplementedError)
    (self-hosted, real)
                   |
                   v
-             activities.py (create_jira_tickets_activity)
+             temporal/activities/create_jira_tickets.py
                   |
                   v
-             jira_client.py (JiraClient)
+             jira/client.py (JiraClient)
                   |
                   v
-             Jira Cloud (find_existing_ticket dedupe, then create_ticket)
+             Jira Cloud (find_existing_ticket dedupe, then create_ticket,
+                         then add to the project's active sprint if one exists)
 ```
 
-The `SonarClient` abstract interface in `sonar_client.py` is the seam
+The `SonarClient` abstract interface in `sonar/interface.py` is the seam
 between this project and whichever Sonar product is in use. Switching
 from self-hosted SonarQube to SonarQube Cloud later should mean:
 
-1. Implementing the two methods on `SonarQubeCloudClient`.
+1. Implementing the two methods on `sonar/cloud_client.py`'s `SonarQubeCloudClient`.
 2. Setting `SONAR_MODE=cloud` in `.env`.
 
-Nothing in `workflows.py`, `activities.py`, or `receiver.py` should need
-to change.
+Nothing in the `temporal/` package or `receiver/` should need to change.
+
+All data crossing a boundary (Sonar issues, Jira ticket results, workflow
+input) is a Pydantic `BaseModel` (`sonar/models.py`, `jira/models.py`,
+`temporal/models/sonar_to_jira.py`), not a plain dict or dataclass -
+Temporal is configured with a Pydantic-aware data converter
+(`temporal/data_converter.py`) so these serialize automatically across the
+workflow/activity boundary with no manual `.model_dump()`/`asdict()` calls.
 
 ## Prerequisites
 
@@ -72,24 +81,44 @@ Wait a minute or two for it to start, then open http://localhost:9000
 
 ## 2. Generate a SonarQube token
 
-In SonarQube: **My Account > Security > Generate Tokens**. Copy the token,
+In SonarQube: **My Account > Security > Generate Tokens**. When picking a
+token type, use **User Token**, not "Project Analysis Token" - a
+project-scoped token (prefix `sqp_`) can only analyze the one project it
+was issued for and can't auto-create new projects, which will fail with
+`You're not authorized to analyze this project or the project doesn't
+exist...` the first time you scan a new project key. A user token
+(prefix `squ_`) tied to your admin account has full rights. Copy it,
 you'll put it in `.env` as `SONAR_TOKEN`.
 
-## 3. Scan the sample project
+## 3. Scan this repo
 
 Install the [SonarScanner CLI](https://docs.sonarsource.com/sonarqube/latest/analyzing-source-code/scanners/sonarscanner/)
-locally, then from the `sample_project/` directory:
+locally, then from the repo root:
 
 ```bash
-cd sample_project
-sonar-scanner \
-  -Dsonar.login=<your-token>
+sonar-scanner -Dsonar.token=<your-token>
 ```
 
-This uses `sonar-project.properties` already in that folder. After it
-finishes, refresh the SonarQube UI - you should see the project
-`sonar-to-jira-sample` with one flagged vulnerability (the hardcoded API
-key in `app.py`).
+This uses the `sonar-project.properties` at the repo root (project key
+`sonar-to-jira`, `.venv`/`__pycache__`/`.git`/`.ruff_cache` excluded) and
+scans the actual pipeline code (`receiver/`, `temporal/`, `sonar/`,
+`jira/`). After it finishes, refresh the SonarQube UI - you should see
+the project with a handful of flagged issues (e.g. CSRF disabled on the
+webhook route, the Flask debugger left on).
+
+Note: the scanner must be run from the directory containing
+`sonar-project.properties`, or it won't find it (logs `Project root
+configuration file: NONE`) and will silently fall back to trying to talk
+to SonarCloud instead of your local instance.
+
+Project keys are effectively case-insensitive for uniqueness purposes -
+if you ever hit `Could not create Project with key: "x". A similar key
+already exists: "X"`, an earlier attempt already created a differently-cased
+version of that project. List existing projects with
+`curl -u "$SONAR_TOKEN:" "http://localhost:9000/api/projects/search"` and
+either delete the stray one (**Project Settings > Deletion**, or
+`POST /api/projects/delete?project=<key>`) or match its exact casing in
+your `sonar-project.properties`.
 
 ## 4. Configure the webhook
 
@@ -103,6 +132,36 @@ global one) and add a webhook:
   with `--network host`)
 - **Secret:** any string you like - put the same value in `.env` as
   `SONAR_WEBHOOK_SECRET`
+
+Webhooks are a standard feature of SonarQube Community Build - they are
+**not** a paid/Enterprise feature, despite how it might look if you
+stumble on an unrelated locked feature nearby (PR decoration, branch
+analysis, and ALM bindings are the things actually gated behind
+Developer/Enterprise editions).
+
+Be careful pasting the secret into the SonarQube UI field - if you
+copy-paste it including surrounding quotes from `.env`, the webhook will
+sign with a different string than what your receiver expects, and every
+delivery will get rejected with 401. You can check what SonarQube thinks
+the delivery status was (without ever seeing the secret itself, which is
+write-only) via:
+
+```bash
+curl -u "$SONAR_TOKEN:" "http://localhost:9000/api/webhooks/deliveries"
+```
+
+If `success` is `false` with `httpStatus: 401` even though your receiver
+logs show the secret loaded correctly, re-set the webhook secret from the
+API to guarantee an exact match (replace the webhook UUID with your own,
+from `/api/webhooks/list`):
+
+```bash
+curl -u "$SONAR_TOKEN:" -X POST "http://localhost:9000/api/webhooks/update" \
+  --data-urlencode "webhook=<webhook-uuid>" \
+  --data-urlencode "name=sonar-to-jira" \
+  --data-urlencode "url=http://host.docker.internal:5001/webhooks/sonarqube" \
+  --data-urlencode "secret=$SONAR_WEBHOOK_SECRET"
+```
 
 ## 5. Set up Jira Cloud
 
@@ -122,6 +181,29 @@ global one) and add a webhook:
 You'll put all four of these (`JIRA_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`,
 `JIRA_PROJECT_KEY`) in `.env` in the next step.
 
+**If your project is "team-managed" (the default template for new free
+Jira sites, e.g. a Scrum project), it may not have a `Bug` issue type out
+of the box** - only `Epic`, `Task`, `Story`, `Subtask`. This project
+creates tickets with `"issuetype": {"name": "Bug"}`, so if that type
+doesn't exist you'll get `400 Specify a valid issue type` on ticket
+creation. Fix: **Project settings > Issue types > Add issue type**,
+name it exactly `Bug`. (This is different from the "Features" toggle
+some Jira docs mention - in current team-managed projects, issue types
+are added directly on this page, not toggled as a feature.) You can check
+what issue types exist for your project via:
+
+```bash
+curl -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+  "$JIRA_URL/rest/api/3/issue/createmeta?projectKeys=$JIRA_PROJECT_KEY&expand=projects.issuetypes"
+```
+
+**New tickets land in the active sprint automatically, if one exists.**
+`jira/client.py` looks up the project's (first) Agile board and its
+active sprint, and moves each newly-created ticket into it. If there's no
+active sprint running, tickets fall back to the backlog (not an error,
+just a log warning) - start a sprint on your board if you want to see
+tickets show up on the Board view rather than the Backlog view.
+
 **Why dedupe uses a label instead of a custom field:** a label is a
 built-in field every Jira project already has - no setup, no
 permissions, works immediately on a brand-new free-tier project. A
@@ -134,8 +216,8 @@ zero setup cost.
 ## 6. Set up the Python environment
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 ```
@@ -147,11 +229,28 @@ Edit `.env` and fill in:
 - Leave `SONAR_MODE=local` and `SONAR_HOST_URL=http://localhost:9000` as-is
 - `JIRA_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY` - from step 5
 
-Because `.env` isn't loaded automatically by these scripts, export it into
-your shell before running anything:
+Because `.env` isn't loaded automatically by these scripts, load it into
+your shell before running anything. Use `source`, not `export $(... | xargs)`
+— the latter doesn't strip quotes from values, so a value written as
+`FOO="bar"` ends up in the environment as the literal string `"bar"`
+(quotes included), which breaks every API call that uses it:
 
 ```bash
-export $(grep -v '^#' .env | xargs)
+set -a
+source .env
+set +a
+```
+
+Run this in every terminal (worker, receiver) before starting the
+corresponding process, and re-run it (then restart the process) any time
+you edit `.env`. Note that re-sourcing `.env` in a terminal does **not**
+update an already-running process's environment - you must actually kill
+and restart the worker/receiver process for the new values to take effect.
+You can sanity-check what a running process actually has loaded with (on
+macOS):
+
+```bash
+ps eww -p <pid> | tr ' ' '\n' | grep SONAR_WEBHOOK_SECRET
 ```
 
 ## 7. Start the Temporal dev server
@@ -167,34 +266,37 @@ http://localhost:8233 where you can watch workflow executions.
 
 ## 8. Start the Temporal worker
 
-In another terminal (with the venv activated and `.env` exported):
+In another terminal (with the venv activated and `.env` sourced). Run it
+as a module from the repo root, not as a script - the package imports
+(`from temporal.activities... import ...`, `from sonar.models import
+...`) only resolve when the repo root is on `sys.path`, which `-m` gives
+you automatically:
 
 ```bash
-python worker.py
+python -m temporal.worker
 ```
 
 ## 9. Start the webhook receiver
 
-In another terminal (same venv/env):
+In another terminal (same venv/env), also run as a module from the repo
+root:
 
 ```bash
-python receiver.py
+python -m receiver.app
 ```
 
 This starts Flask on `http://localhost:5001`.
 
 ## 10. Trigger it
 
-Re-run the scanner against the sample project (or click **"Trigger
-webhook"** manually if SonarQube's admin UI exposes it, depending on
-version):
+Re-run the scanner from the repo root (or click **"Trigger webhook"**
+manually if SonarQube's admin UI exposes it, depending on version):
 
 ```bash
-cd sample_project
-sonar-scanner -Dsonar.login=<your-token>
+sonar-scanner -Dsonar.token=<your-token>
 ```
 
-When the analysis finishes, SonarQube fires the webhook -> `receiver.py`
+When the analysis finishes, SonarQube fires the webhook -> `receiver/app.py`
 verifies the signature -> starts `SonarToJiraWorkflow` -> the workflow
 calls `fetch_vulnerabilities_activity` (hits SonarQube via
 `SonarQubeServerClient`) -> then `create_jira_tickets_activity` (hits
@@ -206,48 +308,51 @@ anything) -> results are logged.
 1. **Temporal Web UI** (http://localhost:8233) - find the workflow run and
    confirm it **Completed**. Open it and check the result of the second
    activity (`create_jira_tickets_activity`) - it should show a
-   `created` list with one entry (the hardcoded-secret issue) and an
-   empty `skipped` list on a first run.
-2. **`worker.py` terminal** - look for lines like:
+   `created` list with one entry per flagged issue and an empty `skipped`
+   list on a first run.
+2. **worker terminal** (`python -m temporal.worker`) - look for lines like:
    ```
    Jira: created 1 ticket(s), skipped 0 already-ticketed issue(s)
      created SONAR-1 for sonar issue AbCdEfGh...
    ```
-3. **Jira project board** - open your project in Jira Cloud, confirm a new
-   ticket appeared with summary `[Sonar] ... in app.py:...`, type `Bug`,
-   and labels including `sonarqube`, `security`, and a
-   `sonar-key-<sonar-issue-key>` label.
+3. **Jira** - open your project in Jira Cloud, confirm new ticket(s)
+   appeared with summary `[Sonar] ... in <file>:<line>`, type `Bug`, and
+   labels including `sonarqube`, `security`, and a
+   `sonar-key-<sonar-issue-key>` label. If your project has an **active
+   sprint**, the ticket lands directly on the **Board** tab; if not, it's
+   in the **Backlog** tab instead (new tickets never appear on the board
+   without an active sprint to put them in).
 
 ### Verifying dedupe (no duplicate tickets on a re-scan)
 
-1. With a ticket already created from step 10 above, re-run the exact same
+1. With tickets already created from step 10 above, re-run the exact same
    scan without changing any code:
    ```bash
-   cd sample_project
-   sonar-scanner -Dsonar.login=<your-token>
+   sonar-scanner -Dsonar.token=<your-token>
    ```
-   SonarQube re-analyzes the file, finds the same issue (same stable
-   issue key, since nothing changed), and fires the webhook again with a
+   SonarQube re-analyzes the code, finds the same issues (same stable
+   issue keys, since nothing changed), and fires the webhook again with a
    new `taskId`.
-2. Watch the `worker.py` terminal for the second run. You should now see:
+2. Watch the worker terminal for the second run. You should now see
+   something like:
    ```
-   Jira: created 0 ticket(s), skipped 1 already-ticketed issue(s)
+   Jira: created 0 ticket(s), skipped 2 already-ticketed issue(s)
      skipped sonar issue AbCdEfGh... (ticket already exists)
+     skipped sonar issue ZyXwVuTs... (ticket already exists)
    ```
    The `skipped` count should match the number of issues that had tickets
    from the previous run, and `created` should be empty (assuming no new
    issues were introduced).
 3. Cross-check in Temporal Web UI: open the second workflow execution's
    result and confirm `created` is `[]` and `skipped` contains the same
-   Sonar issue key from the first run.
-4. Cross-check in Jira: refresh the project board and confirm there is
-   still exactly **one** ticket with the `sonar-key-<key>` label - not
-   two.
+   Sonar issue keys from the first run.
+4. Cross-check in Jira: refresh the project board and confirm there's
+   still exactly one ticket per `sonar-key-<key>` label - no duplicates.
 
 If you want to force a *new* ticket to prove dedupe isn't just "always
-skip," add a second hardcoded secret to `sample_project/app.py`, re-scan,
-and confirm exactly one new ticket is created (`created` has 1 entry) while
-the original issue is still skipped.
+skip," introduce a new flagged issue somewhere in the codebase, re-scan,
+and confirm exactly one new ticket is created for it while the existing
+issues are still reported as skipped.
 
 ## Testing the receiver without a real SonarQube webhook
 
@@ -259,7 +364,7 @@ import hmac, hashlib, json, requests
 secret = "changeme"  # must match SONAR_WEBHOOK_SECRET
 body = json.dumps({
     "taskId": "test-task-1",
-    "project": {"key": "sonar-to-jira-sample"},
+    "project": {"key": "sonar-to-jira"},
 }).encode()
 
 signature = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
@@ -274,21 +379,48 @@ requests.post(
 )
 ```
 
+(`receiver/app.py` needs to already be running for this to hit anything.)
+
 ## Project structure
 
 ```
-receiver.py                 Flask app, POST /webhooks/sonarqube
-sonar_client.py              SonarClient interface + SonarQubeServerClient (real) + SonarQubeCloudClient (stub)
-jira_client.py                JiraClient: find_existing_ticket (dedupe) + create_ticket
-activities.py                Temporal activities: fetch_vulnerabilities_activity, create_jira_tickets_activity
-workflows.py                 Temporal workflow: SonarToJiraWorkflow
-worker.py                    Temporal worker (task queue: sonar-jira-queue)
+receiver/
+  app.py                       Flask app: POST /webhooks/sonarqube route only
+  verify_signature.py          HMAC-SHA256 webhook signature verification
+  starter.py                   Connects to Temporal and starts SonarToJiraWorkflow
+
+temporal/
+  worker.py                    Temporal worker entrypoint (task queue: sonar-jira-queue)
+  data_converter.py            TASK_QUEUE constant + the Pydantic-aware data converter
+  activities/
+    fetch_vulnerabilities.py   fetch_vulnerabilities_activity (calls the Sonar interface)
+    create_jira_tickets.py     create_jira_tickets_activity (dedupe + create via JiraClient)
+  workflows/
+    sonar_to_jira.py           SonarToJiraWorkflow
+  models/
+    sonar_to_jira.py           SonarToJiraInput (the workflow's input model)
+
+sonar/
+  models.py                    SonarIssue (Pydantic BaseModel)
+  interface.py                 SonarClient (ABC) - the Sonar/Cloud seam
+  server_client.py             SonarQubeServerClient - real, self-hosted implementation
+  cloud_client.py               SonarQubeCloudClient - stub, raises NotImplementedError
+  factory.py                    get_sonar_client() - picks a client based on SONAR_MODE
+
+jira/
+  client.py                    JiraClient: find_existing_ticket (dedupe) + create_ticket + active-sprint assignment
+  models.py                    CreatedTicket, JiraTicketResult (Pydantic BaseModel)
+
 requirements.txt
 .env.example
-sample_project/               Tiny scannable project with one obvious flagged issue
-  app.py
-  sonar-project.properties
+sonar-project.properties       Scan config for this repo (project key: sonar-to-jira)
 ```
+
+Every package (`receiver/`, `temporal/`, `sonar/`, `jira/`) is a plain
+Python package (has an `__init__.py`), and the two entrypoints
+(`temporal/worker.py`, `receiver/app.py`) must be run with `python -m` from
+the repo root so their `from sonar...`/`from jira...`/`from temporal...`
+imports resolve - see steps 8 and 9.
 
 ## What's not built yet
 
