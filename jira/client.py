@@ -23,6 +23,11 @@ DEFAULT_PRIORITY = "Medium"
 
 SUMMARY_MAX_LENGTH = 255
 
+TYPE_LABELS = {
+    "VULNERABILITY": "Vulnerability",
+    "SECURITY_HOTSPOT": "Security Hotspot",
+}
+
 
 class JiraClient:
     def __init__(self, base_url: str, email: str, api_token: str, project_key: str):
@@ -132,7 +137,12 @@ class JiraClient:
                         {
                             "type": "listItem",
                             "content": [
-                                {"type": "paragraph", "content": [{"type": "text", "text": f"Rule: {issue.rule}"}]}
+                                {
+                                    "type": "paragraph",
+                                    "content": [
+                                        {"type": "text", "text": f"Rule: {issue.rule_name} ({issue.rule})"}
+                                    ],
+                                }
                             ],
                         },
                         {
@@ -153,7 +163,24 @@ class JiraClient:
                         {
                             "type": "listItem",
                             "content": [
-                                {"type": "paragraph", "content": [{"type": "text", "text": f"Type: {issue.type}"}]}
+                                {
+                                    "type": "paragraph",
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": f"Type: {TYPE_LABELS.get(issue.type, issue.type)}",
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                        {
+                            "type": "listItem",
+                            "content": [
+                                {
+                                    "type": "paragraph",
+                                    "content": [{"type": "text", "text": f"Severity: {issue.severity}"}],
+                                }
                             ],
                         },
                         {
@@ -176,11 +203,33 @@ class JiraClient:
             ],
         }
 
+    def _build_summary(self, issue: SonarIssue) -> str:
+        """
+        Lead with what kind of issue this is and why (type + rule name),
+        then the specific message, located by the full relative file path
+        rather than just a bare filename (two files can share a name).
+        """
+        type_label = TYPE_LABELS.get(issue.type, issue.type)
+        # component is "{project_key}:{relative/path}" - drop the project key.
+        relative_path = issue.component.split(":", 1)[-1]
+        location = f"{relative_path}:{issue.line}" if issue.line is not None else relative_path
+        message = " ".join(issue.message.split())  # collapse newlines/extra whitespace
+
+        prefix = f"{type_label} [{issue.rule_name}]: "
+        suffix = f" ({location})"
+        available = SUMMARY_MAX_LENGTH - len(prefix) - len(suffix)
+        if len(message) > available:
+            message = message[: max(available - 3, 0)] + "..."
+
+        summary = f"{prefix}{message}{suffix}"
+        if len(summary) > SUMMARY_MAX_LENGTH:
+            # prefix + suffix alone (long rule name/path) overflowed the budget
+            summary = summary[: SUMMARY_MAX_LENGTH - 3] + "..."
+        return summary
+
     def create_ticket(self, issue: SonarIssue) -> str:
         """Create a Jira issue for a SonarQube issue, return the new issue key."""
-        summary = f"[Sonar] {issue.rule} in {issue.component}:{issue.line}"
-        if len(summary) > SUMMARY_MAX_LENGTH:
-            summary = summary[: SUMMARY_MAX_LENGTH - 3] + "..."
+        summary = self._build_summary(issue)
 
         payload = {
             "fields": {

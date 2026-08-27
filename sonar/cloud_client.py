@@ -27,3 +27,8 @@ class SonarQubeCloudClient(SonarClient):
         raise NotImplementedError(
             "SonarQube Cloud support comes later - see get_sonar_client()"
         )
+
+    def fetch_rule_name(self, rule_key: str) -> str:
+        raise NotImplementedError(
+            "SonarQube Cloud support comes later - see get_sonar_client()"
+        )

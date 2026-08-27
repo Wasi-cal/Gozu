@@ -15,3 +15,8 @@ class SonarClient(ABC):
     def fetch_hotspots(self, project_key: str) -> list[SonarIssue]:
         """Return TO_REVIEW security hotspots for a project."""
         raise NotImplementedError
+
+    @abstractmethod
+    def fetch_rule_name(self, rule_key: str) -> str:
+        """Return the human-readable name for a rule (e.g. "Cognitive Complexity")."""
+        raise NotImplementedError
