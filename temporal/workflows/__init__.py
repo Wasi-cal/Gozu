@@ -1,3 +1,3 @@
-from temporal.workflows.sonar_to_jira import SonarToJiraWorkflow
+from temporal.workflows.scan_to_ticket import ScanToTicketWorkflow
 
-__all__ = ["SonarToJiraWorkflow"]
+__all__ = ["ScanToTicketWorkflow"]
