@@ -4,8 +4,8 @@ import dataclasses
 
 from temporalio import activity
 
-from models import Finding
-from scanner_client import get_scanner_client
+from core.models import Finding
+from scanner.client import get_scanner_client
 
 
 @activity.defn

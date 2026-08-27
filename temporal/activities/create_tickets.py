@@ -2,8 +2,8 @@
 
 from temporalio import activity
 
-from models import CreatedTicket, Finding, Severity, TicketResult
-from ticket_client import get_ticket_client
+from core.models import CreatedTicket, Finding, Severity, TicketResult
+from ticket.client import get_ticket_client
 
 
 @activity.defn

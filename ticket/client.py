@@ -3,7 +3,7 @@ Generic ticketing interface plus the Jira implementation.
 
 Adding a new ticket destination (Linear, GitHub Issues, whatever) means
 writing a new TicketClient subclass here and registering it in
-get_ticket_client() - nothing in models.py, scanner_client.py, or the
+get_ticket_client() - nothing in core/models.py, scanner/client.py, or the
 Temporal workflow/activities/receiver needs to change.
 """
 
@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 
 import requests
 
-from models import Finding, Severity
+from core.models import Finding, Severity
 
 logger = logging.getLogger(__name__)
 

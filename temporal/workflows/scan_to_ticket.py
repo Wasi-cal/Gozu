@@ -7,7 +7,7 @@ from temporalio import workflow
 from temporal.models.sonar_to_jira import SonarToJiraInput
 
 with workflow.unsafe.imports_passed_through():
-    from models import TicketResult
+    from core.models import TicketResult
     from temporal.activities.create_tickets import create_tickets_activity
     from temporal.activities.fetch_findings import fetch_findings_activity
 

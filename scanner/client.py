@@ -3,7 +3,7 @@ Generic scanner interface plus the SonarQube implementations.
 
 Adding a new scanner (Snyk, Semgrep, whatever) means writing a new
 ScannerClient subclass here and registering it in get_scanner_client() -
-nothing in models.py, ticket_client.py, or the Temporal
+nothing in core/models.py, ticket/client.py, or the Temporal
 workflow/activities/receiver needs to change.
 """
 
@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 
 import requests
 
-from models import Finding, Severity
+from core.models import Finding, Severity
 
 logger = logging.getLogger(__name__)
 

@@ -29,7 +29,7 @@ temporal/worker.py -> temporal/workflows/scan_to_ticket.py (ScanToTicketWorkflow
              temporal/activities/fetch_findings.py
                   |
                   v
-             scanner_client.py (ScannerClient interface)
+             scanner/client.py (ScannerClient interface)
                   |
         -------------------
         |                 |
@@ -40,7 +40,7 @@ temporal/worker.py -> temporal/workflows/scan_to_ticket.py (ScanToTicketWorkflow
              temporal/activities/create_tickets.py
                   |
                   v
-             ticket_client.py (TicketClient interface)
+             ticket/client.py (TicketClient interface)
                   |
                   v
              JiraClient
@@ -54,19 +54,19 @@ The pipeline is generic over which scanner and which ticketing system are
 behind it - SonarQube and Jira are just the only implementations that
 exist today.
 
-- **`models.py`** defines the normalized vocabulary every adapter speaks:
+- **`core/models.py`** defines the normalized vocabulary every adapter speaks:
   `Severity` (CRITICAL/HIGH/MEDIUM/LOW/INFO) and `Finding`. Neither side of
   the pipeline ever sees a tool-specific value (SonarQube's
   BLOCKER/MAJOR/etc, or any future tool's own scale) outside its own
   adapter.
-- **`scanner_client.py`** is the scanner extension point: `ScannerClient`
+- **`scanner/client.py`** is the scanner extension point: `ScannerClient`
   (ABC, one method - `fetch_findings(project_key) -> list[Finding]`),
   implemented today by `SonarQubeServerClient` (real) and
   `SonarQubeCloudClient` (stub, raises `NotImplementedError`), selected by
   `get_scanner_client()` based on `SCANNER_TYPE`. Adding a new scanner
   means implementing `ScannerClient` and registering it in
   `get_scanner_client()` - no other file changes.
-- **`ticket_client.py`** is the ticketing extension point: `TicketClient`
+- **`ticket/client.py`** is the ticketing extension point: `TicketClient`
   (ABC, `find_existing(finding_key)` + `create_ticket(finding)`),
   implemented today by `JiraClient`, selected by `get_ticket_client()`
   based on `TICKET_BACKEND`. Adding a new ticket destination means
@@ -79,7 +79,7 @@ new scanner or ticket backend - they only ever talk to `ScannerClient` /
 
 Switching from self-hosted SonarQube to SonarQube Cloud later should mean:
 
-1. Implementing `fetch_findings()` on `scanner_client.py`'s `SonarQubeCloudClient`.
+1. Implementing `fetch_findings()` on `scanner/client.py`'s `SonarQubeCloudClient`.
 2. Setting `SCANNER_TYPE=sonarqube-cloud` in `.env`.
 
 **Serialization note:** `Finding` and `Severity` are a plain dataclass/Enum,
@@ -130,8 +130,8 @@ sonar-scanner -Dsonar.token=<your-token>
 
 This uses the `sonar-project.properties` at the repo root (project key
 `sonar-to-jira`, `.venv`/`__pycache__`/`.git`/`.ruff_cache` excluded) and
-scans the actual pipeline code (`receiver/`, `temporal/`, `sonar/`,
-`jira/`). After it finishes, refresh the SonarQube UI - you should see
+scans the actual pipeline code (`receiver/`, `temporal/`, `core/`,
+`scanner/`, `ticket/`). After it finishes, refresh the SonarQube UI - you should see
 the project with a handful of flagged issues (e.g. CSRF disabled on the
 webhook route, the Flask debugger left on).
 
@@ -227,7 +227,7 @@ curl -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
 ```
 
 **New tickets land in the active sprint automatically, if one exists.**
-`ticket_client.py`'s `JiraClient` looks up the project's (first) Agile board and its
+`ticket/client.py`'s `JiraClient` looks up the project's (first) Agile board and its
 active sprint, and moves each newly-created ticket into it. If there's no
 active sprint running, tickets fall back to the backlog (not an error,
 just a log warning) - start a sprint on your board if you want to see
@@ -298,7 +298,7 @@ http://localhost:8233 where you can watch workflow executions.
 
 In another terminal (with the venv activated and `.env` sourced). Run it
 as a module from the repo root, not as a script - the package imports
-(`from temporal.activities... import ...`, `from models import ...`) only
+(`from temporal.activities... import ...`, `from core.models import ...`) only
 resolve when the repo root is on `sys.path`, which `-m` gives you
 automatically:
 
@@ -430,24 +430,28 @@ temporal/
   models/
     sonar_to_jira.py           SonarToJiraInput (the workflow's input model)
 
-models.py                      Finding, Severity (normalized vocabulary), CreatedTicket, TicketResult
-scanner_client.py               ScannerClient (ABC) - the scanner extension point.
-                                 SonarQubeServerClient (real) + SonarQubeCloudClient (stub) +
-                                 get_scanner_client() (picks one based on SCANNER_TYPE)
-ticket_client.py                TicketClient (ABC) - the ticket extension point.
-                                 JiraClient + get_ticket_client() (picks one based on TICKET_BACKEND)
+core/
+  models.py                    Finding, Severity (normalized vocabulary), CreatedTicket, TicketResult
+
+scanner/
+  client.py                    ScannerClient (ABC) - the scanner extension point.
+                                SonarQubeServerClient (real) + SonarQubeCloudClient (stub) +
+                                get_scanner_client() (picks one based on SCANNER_TYPE)
+
+ticket/
+  client.py                    TicketClient (ABC) - the ticket extension point.
+                                JiraClient + get_ticket_client() (picks one based on TICKET_BACKEND)
 
 requirements.txt
 .env.example
 sonar-project.properties       Scan config for this repo (project key: sonar-to-jira)
 ```
 
-`receiver/` and `temporal/` are plain Python packages (have an
-`__init__.py`); `models.py`, `scanner_client.py`, and `ticket_client.py`
-are flat top-level modules, imported the same way from anywhere in the
-project. The two entrypoints (`temporal/worker.py`, `receiver/app.py`)
-must be run with `python -m` from the repo root so these imports resolve -
-see steps 8 and 9.
+Every top-level package (`receiver/`, `temporal/`, `core/`, `scanner/`,
+`ticket/`) has an `__init__.py`, and the two entrypoints
+(`temporal/worker.py`, `receiver/app.py`) must be run with `python -m`
+from the repo root so their `from core...`/`from scanner...`/
+`from ticket...`/`from temporal...` imports resolve - see steps 8 and 9.
 
 ## What's not built yet
 

@@ -1,6 +1,6 @@
 """
-Normalized domain vocabulary shared by every scanner adapter (scanner_client.py)
-and every ticket adapter (ticket_client.py).
+Normalized domain vocabulary shared by every scanner adapter (scanner/client.py)
+and every ticket adapter (ticket/client.py).
 
 Neither side should ever see a tool-specific value (SonarQube's BLOCKER/MAJOR
 severities, Jira's issue keys, etc) outside its own adapter - everything that
