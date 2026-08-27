@@ -19,6 +19,10 @@ from receiver.verify_signature import verify_signature
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# No CSRF protection needed: this app has no cookies/sessions/HTML forms for
+# an attacker's page to ride on. The only route is a webhook authenticated by
+# HMAC signature (verify_signature.py), which a forged cross-site request
+# can't produce without SONAR_WEBHOOK_SECRET.
 app = Flask(__name__)
 
 
