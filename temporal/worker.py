@@ -4,6 +4,7 @@ import logging
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from temporal.activities.capture_and_attach_screenshot import capture_and_attach_screenshot_activity
 from temporal.activities.create_jira_tickets import create_jira_tickets_activity
 from temporal.activities.fetch_vulnerabilities import fetch_vulnerabilities_activity
 from temporal.data_converter import DATA_CONVERTER, TASK_QUEUE
@@ -19,7 +20,11 @@ async def main():
         client,
         task_queue=TASK_QUEUE,
         workflows=[SonarToJiraWorkflow],
-        activities=[fetch_vulnerabilities_activity, create_jira_tickets_activity],
+        activities=[
+            fetch_vulnerabilities_activity,
+            create_jira_tickets_activity,
+            capture_and_attach_screenshot_activity,
+        ],
     )
 
     print(f"Worker started, listening on task queue '{TASK_QUEUE}'...")

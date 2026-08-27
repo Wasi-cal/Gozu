@@ -8,7 +8,12 @@ Temporal. Everything below runs locally and free.
 starts -> an activity fetches real vulnerabilities/hotspots from local
 SonarQube -> a second activity creates a Jira ticket for each issue that
 doesn't already have one (dedupe via a label), skipping the rest, and
-drops new tickets straight into the project's active sprint if one exists.
+drops new tickets straight into the project's active sprint if one exists
+-> a third activity screenshots each newly-created ticket's flagged code
+in the SonarQube UI and attaches it to the ticket. The screenshot activity
+runs concurrently per ticket, with its own (more lenient) timeout and
+retry policy, and its failures are isolated per-ticket - a broken
+screenshot never fails the workflow run or affects ticket creation/dedupe.
 
 ## Architecture
 
@@ -45,6 +50,17 @@ temporal/worker.py -> temporal/workflows/sonar_to_jira.py (SonarToJiraWorkflow)
                   v
              Jira Cloud (find_existing_ticket dedupe, then create_ticket,
                          then add to the project's active sprint if one exists)
+                  |
+                  v  (for each newly-created ticket, concurrently)
+             temporal/activities/capture_and_attach_screenshot.py
+                  |
+                  v
+             sonar/screenshot.py (Playwright, async API) -> screenshot of the
+             issue's source viewer panel
+                  |
+                  v
+             jira/client.py (JiraClient.attach_screenshot) -> attaches
+             sonar-{issue-key}.png to the ticket
 ```
 
 The `SonarClient` abstract interface in `sonar/interface.py` is the seam
@@ -219,8 +235,13 @@ zero setup cost.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+playwright install chromium
 cp .env.example .env
 ```
+
+`playwright install chromium` downloads Playwright's own browser binary
+(used by `sonar/screenshot.py` to screenshot flagged issues) - it's
+separate from the pip package and only needs to run once.
 
 Edit `.env` and fill in:
 
@@ -306,14 +327,18 @@ anything) -> results are logged.
 ### How to confirm success
 
 1. **Temporal Web UI** (http://localhost:8233) - find the workflow run and
-   confirm it **Completed**. Open it and check the result of the second
-   activity (`create_jira_tickets_activity`) - it should show a
-   `created` list with one entry per flagged issue and an empty `skipped`
-   list on a first run.
+   confirm it **Completed**. There are now three activities in the run,
+   not two: `fetch_vulnerabilities_activity`, `create_jira_tickets_activity`
+   (should show a `created` list with one entry per flagged issue and an
+   empty `skipped` list on a first run), and one
+   `capture_and_attach_screenshot_activity` per created ticket. A failure
+   on the screenshot activity (visible per-activity in the UI) does not
+   turn the overall workflow result into a failure.
 2. **worker terminal** (`python -m temporal.worker`) - look for lines like:
    ```
    Jira: created 1 ticket(s), skipped 0 already-ticketed issue(s)
      created SONAR-1 for sonar issue AbCdEfGh...
+     attached screenshot to SONAR-1
    ```
 3. **Jira** - open your project in Jira Cloud, confirm new ticket(s)
    appeared with summary `[Sonar] ... in <file>:<line>`, type `Bug`, and
@@ -321,7 +346,8 @@ anything) -> results are logged.
    `sonar-key-<sonar-issue-key>` label. If your project has an **active
    sprint**, the ticket lands directly on the **Board** tab; if not, it's
    in the **Backlog** tab instead (new tickets never appear on the board
-   without an active sprint to put them in).
+   without an active sprint to put them in). Also confirm the ticket has a
+   `sonar-{issue-key}.png` attachment showing the flagged code.
 
 ### Verifying dedupe (no duplicate tickets on a re-scan)
 
@@ -395,10 +421,12 @@ temporal/
   activities/
     fetch_vulnerabilities.py   fetch_vulnerabilities_activity (calls the Sonar interface)
     create_jira_tickets.py     create_jira_tickets_activity (dedupe + create via JiraClient)
+    capture_and_attach_screenshot.py  capture_and_attach_screenshot_activity (screenshot + attach via Playwright/JiraClient)
   workflows/
     sonar_to_jira.py           SonarToJiraWorkflow
   models/
     sonar_to_jira.py           SonarToJiraInput (the workflow's input model)
+    screenshot_attach.py       ScreenshotAttachInput (the screenshot activity's input model)
 
 sonar/
   models.py                    SonarIssue (Pydantic BaseModel)
@@ -406,9 +434,10 @@ sonar/
   server_client.py             SonarQubeServerClient - real, self-hosted implementation
   cloud_client.py               SonarQubeCloudClient - stub, raises NotImplementedError
   factory.py                    get_sonar_client() - picks a client based on SONAR_MODE
+  screenshot.py                 capture_issue_screenshot (Playwright, async API)
 
 jira/
-  client.py                    JiraClient: find_existing_ticket (dedupe) + create_ticket + active-sprint assignment
+  client.py                    JiraClient: find_existing_ticket (dedupe) + create_ticket + active-sprint assignment + attach_screenshot
   models.py                    CreatedTicket, JiraTicketResult (Pydantic BaseModel)
 
 requirements.txt
