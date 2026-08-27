@@ -8,7 +8,12 @@ Temporal. Everything below runs locally and free.
 starts -> an activity fetches real vulnerabilities/hotspots from local
 SonarQube -> a second activity creates a Jira ticket for each issue that
 doesn't already have one (dedupe via a label), skipping the rest, and
-drops new tickets straight into the project's active sprint if one exists.
+drops new tickets straight into the project's active sprint if one exists
+-> a third activity screenshots each newly-created ticket's flagged code
+in the SonarQube UI and attaches it to the ticket. The screenshot activity
+runs concurrently per ticket, with its own (more lenient) timeout and
+retry policy, and its failures are isolated per-ticket - a broken
+screenshot never fails the workflow run or affects ticket creation/dedupe.
 
 ## Architecture
 
@@ -48,6 +53,17 @@ temporal/worker.py -> temporal/workflows/scan_to_ticket.py (ScanToTicketWorkflow
                   v
              Jira Cloud (find_existing dedupe, then create_ticket,
                          then add to the project's active sprint if one exists)
+                  |
+                  v  (for each newly-created ticket, concurrently)
+             temporal/activities/capture_and_attach_screenshot.py
+                  |
+                  v
+             scanner/screenshot.py (Playwright, async API) -> screenshot of
+             the finding's source viewer panel
+                  |
+                  v
+             ticket/client.py (JiraClient.attach_screenshot) -> attaches
+             sonarqube-{finding-key}.png to the ticket
 ```
 
 The pipeline is generic over which scanner and which ticketing system are
@@ -76,6 +92,14 @@ exist today.
 Nothing in the `temporal/` package or `receiver/` needs to change to add a
 new scanner or ticket backend - they only ever talk to `ScannerClient` /
 `TicketClient` / `Finding`.
+
+Screenshot capture/attach (`scanner/screenshot.py`,
+`ticket/client.py`'s `attach_screenshot`) is a bonus capability layered on
+top, not part of either abstract interface - it's called directly from
+`capture_and_attach_screenshot_activity` rather than through
+`get_scanner_client()`/`get_ticket_client()`, since it's specific to
+SonarQube's UI and Jira's attachment API and isn't guaranteed to exist on
+every future scanner/ticket backend.
 
 Switching from self-hosted SonarQube to SonarQube Cloud later should mean:
 
@@ -248,8 +272,13 @@ zero setup cost.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+playwright install chromium
 cp .env.example .env
 ```
+
+`playwright install chromium` downloads Playwright's own browser binary
+(used by `scanner/screenshot.py` to screenshot flagged findings) - it's
+separate from the pip package and only needs to run once.
 
 Edit `.env` and fill in:
 
@@ -336,14 +365,18 @@ anything) -> results are logged.
 ### How to confirm success
 
 1. **Temporal Web UI** (http://localhost:8233) - find the workflow run and
-   confirm it **Completed**. Open it and check the result of the second
-   activity (`create_tickets_activity`) - it should show a
+   confirm it **Completed**. There are three activities in the run:
+   `fetch_findings_activity`, `create_tickets_activity` (should show a
    `created` list with one entry per flagged finding and an empty `skipped`
-   list on a first run.
+   list on a first run), and one `capture_and_attach_screenshot_activity`
+   per created ticket. A failure on the screenshot activity (visible
+   per-activity in the UI) does not turn the overall workflow result into
+   a failure.
 2. **worker terminal** (`python -m temporal.worker`) - look for lines like:
    ```
    Tickets: created 1 ticket(s), skipped 0 already-ticketed finding(s)
      created SONAR-1 for finding AbCdEfGh...
+     attached screenshot to SONAR-1
    ```
 3. **Jira** - open your project in Jira Cloud, confirm new ticket(s)
    appeared with a descriptive summary, type `Bug`, and
@@ -351,7 +384,8 @@ anything) -> results are logged.
    `source-key-<finding-key>` label. If your project has an **active
    sprint**, the ticket lands directly on the **Board** tab; if not, it's
    in the **Backlog** tab instead (new tickets never appear on the board
-   without an active sprint to put them in).
+   without an active sprint to put them in). Also confirm the ticket has a
+   `sonarqube-{finding-key}.png` attachment showing the flagged code.
 
 ### Verifying dedupe (no duplicate tickets on a re-scan)
 
@@ -425,10 +459,12 @@ temporal/
   activities/
     fetch_findings.py          fetch_findings_activity (calls the ScannerClient interface)
     create_tickets.py          create_tickets_activity (dedupe + create via the TicketClient interface)
+    capture_and_attach_screenshot.py  capture_and_attach_screenshot_activity (screenshot + attach, bonus capability)
   workflows/
     scan_to_ticket.py          ScanToTicketWorkflow
   models/
     sonar_to_jira.py           SonarToJiraInput (the workflow's input model)
+    screenshot_attach.py       ScreenshotAttachInput (the screenshot activity's input model)
 
 core/
   models.py                    Finding, Severity (normalized vocabulary), CreatedTicket, TicketResult
@@ -437,10 +473,12 @@ scanner/
   client.py                    ScannerClient (ABC) - the scanner extension point.
                                 SonarQubeServerClient (real) + SonarQubeCloudClient (stub) +
                                 get_scanner_client() (picks one based on SCANNER_TYPE)
+  screenshot.py                 capture_finding_screenshot (Playwright, async API) - bonus capability
 
 ticket/
   client.py                    TicketClient (ABC) - the ticket extension point.
-                                JiraClient + get_ticket_client() (picks one based on TICKET_BACKEND)
+                                JiraClient (+ its attach_screenshot bonus method) +
+                                get_ticket_client() (picks one based on TICKET_BACKEND)
 
 requirements.txt
 .env.example

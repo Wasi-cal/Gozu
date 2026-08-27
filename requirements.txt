@@ -2,3 +2,4 @@ flask
 requests
 temporalio
 pydantic
+playwright

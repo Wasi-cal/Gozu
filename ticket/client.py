@@ -10,6 +10,7 @@ Temporal workflow/activities/receiver needs to change.
 import logging
 import os
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 import requests
 
@@ -235,6 +236,38 @@ class JiraClient(TicketClient):
         self._add_issue_to_active_sprint(issue_key)
 
         return issue_key
+
+    def attach_screenshot(self, issue_key: str, image_path: Path) -> None:
+        """
+        Attach a screenshot file to an existing issue. Skips the upload if a
+        file with the same name is already attached, so retries of the
+        calling activity don't create duplicate attachments.
+
+        Not part of the generic TicketClient contract - it's a Jira-specific
+        bonus capability, called directly by the screenshot activity rather
+        than through get_ticket_client()'s abstract interface.
+        """
+        get_response = requests.get(
+            f"{self.base_url}/rest/api/3/issue/{issue_key}",
+            params={"fields": "attachment"},
+            auth=self.auth,
+            headers=self.headers,
+        )
+        self._raise_for_status(get_response, "get attachments")
+
+        existing = get_response.json().get("fields", {}).get("attachment", [])
+        if any(attachment.get("filename") == image_path.name for attachment in existing):
+            logger.warning(f"Attachment {image_path.name} already exists on {issue_key}; skipping upload")
+            return
+
+        with open(image_path, "rb") as f:
+            response = requests.post(
+                f"{self.base_url}/rest/api/3/issue/{issue_key}/attachments",
+                auth=self.auth,
+                headers={"X-Atlassian-Token": "no-check"},
+                files={"file": (image_path.name, f, "image/png")},
+            )
+        self._raise_for_status(response, "attach screenshot")
 
 
 def get_ticket_client() -> TicketClient:

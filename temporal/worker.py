@@ -4,6 +4,9 @@ import logging
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from temporal.activities.capture_and_attach_screenshot import (
+    capture_and_attach_screenshot_activity,
+)
 from temporal.activities.create_tickets import create_tickets_activity
 from temporal.activities.fetch_findings import fetch_findings_activity
 from temporal.data_converter import DATA_CONVERTER, TASK_QUEUE
@@ -19,7 +22,11 @@ async def main():
         client,
         task_queue=TASK_QUEUE,
         workflows=[ScanToTicketWorkflow],
-        activities=[fetch_findings_activity, create_tickets_activity],
+        activities=[
+            fetch_findings_activity,
+            create_tickets_activity,
+            capture_and_attach_screenshot_activity,
+        ],
     )
 
     print(f"Worker started, listening on task queue '{TASK_QUEUE}'...")
