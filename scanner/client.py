@@ -34,6 +34,14 @@ TYPE_LABELS = {
     "hotspot": "Hotspot",
 }
 
+# scanner_type -> display name. The single source of truth for "which
+# scanners exist" - the init wizard's scanner-selection prompt reads this
+# instead of hardcoding "sonarqube" as a magic string, so registering a
+# future scanner here is enough to make it selectable.
+SCANNER_REGISTRY: dict[str, str] = {
+    "sonarqube": "SonarQube",
+}
+
 
 class ScannerRequirements(BaseModel):
     """

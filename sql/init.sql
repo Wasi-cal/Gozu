@@ -8,29 +8,39 @@
 -- unrelated concept called profiles (for conditionally starting services),
 -- and reusing that word here throughout the codebase/docs would be
 -- confusing.
+--
+-- Deliberately normalized: `configs` only holds the fields every backend
+-- has in common (which scanner, local/cloud, which ticket backend, how
+-- it's triggered). Anything backend-specific (a Sonar host URL, a Jira
+-- project key, whatever a future scanner/ticket backend needs) lives in
+-- config_credentials as arbitrary key/value pairs instead of being baked
+-- in as dedicated columns - adding a new scanner or ticket backend never
+-- requires an ALTER TABLE here, matching how ScannerClient/TicketClient
+-- are themselves generic over the backend.
 CREATE TABLE IF NOT EXISTS configs (
-    id                SERIAL PRIMARY KEY,
-    name              TEXT NOT NULL UNIQUE,
-
-    scanner_type      TEXT NOT NULL,              -- e.g. "sonarqube"
-    scanner_mode      TEXT NOT NULL,               -- "local" or "cloud"
-    sonar_host_url    TEXT,
-    sonar_token       TEXT,                        -- Fernet-encrypted ciphertext, never plaintext
-    sonar_organization TEXT,
-
-    ticket_backend    TEXT NOT NULL DEFAULT 'jira',
-    jira_url          TEXT,
-    jira_email        TEXT,
-    jira_api_token    TEXT,                        -- Fernet-encrypted ciphertext, never plaintext
-    jira_project_key  TEXT,
-
-    trigger_mode      TEXT NOT NULL,               -- "direct", "webhook", or "watch"
-    webhook_secret    TEXT,                        -- Fernet-encrypted ciphertext, never plaintext
-
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+    id             SERIAL PRIMARY KEY,
+    name           TEXT NOT NULL UNIQUE,
+    scanner_type   TEXT NOT NULL,               -- e.g. "sonarqube"
+    scanner_mode   TEXT NOT NULL,                -- "local" or "cloud"
+    ticket_backend TEXT NOT NULL DEFAULT 'jira',
+    trigger_mode   TEXT NOT NULL,                -- "direct", "webhook", "watch", "github_poll", ...
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Lookups are by name (config_store.get_config(name), delete_config(name)).
 -- No separate CREATE INDEX needed: the UNIQUE constraint on `name` above
 -- already creates a unique b-tree index that covers exact-match lookups.
+
+-- Every credential/setting value is Fernet-encrypted ciphertext (see
+-- crypto_utils.py), never plaintext - key names are backend-specific
+-- strings (sonar_host_url, sonar_token, sonar_organization, jira_url,
+-- jira_email, jira_api_token, jira_project_key, webhook_secret, ...),
+-- not fixed columns.
+CREATE TABLE IF NOT EXISTS config_credentials (
+    id         SERIAL PRIMARY KEY,
+    config_id  INTEGER NOT NULL REFERENCES configs(id) ON DELETE CASCADE,
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    UNIQUE (config_id, key)
+);

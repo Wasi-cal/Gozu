@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -26,8 +26,8 @@ services:
     entrypoint: ["temporal", "server", "start-dev", "--ip", "0.0.0.0"]
     restart: unless-stopped
     ports:
-      - "7233:7233"
-      - "8233:8233"
+      - "${TEMPORAL_PORT:-7233}:7233"
+      - "${TEMPORAL_UI_PORT:-8233}:8233"
     healthcheck:
       test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "localhost:7233"]
       interval: 5s
@@ -39,7 +39,7 @@ services:
     profiles: ["sonarqube-local"]
     restart: unless-stopped
     ports:
-      - "9000:9000"
+      - "${SONARQUBE_PORT:-9000}:9000"
     volumes:
       - sonarqube_data:/opt/sonarqube/data
       - sonarqube_extensions:/opt/sonarqube/extensions
