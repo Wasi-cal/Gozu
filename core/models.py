@@ -8,7 +8,6 @@ crosses the boundary between "fetch findings" and "create tickets" is expressed
 in these types.
 """
 
-from dataclasses import dataclass
 from enum import Enum
 
 from pydantic import BaseModel
@@ -28,8 +27,7 @@ class Severity(Enum):
     INFO = "INFO"
 
 
-@dataclass
-class Finding:
+class Finding(BaseModel):
     """A single issue reported by a scanner, in tool-agnostic form."""
 
     key: str
@@ -44,9 +42,6 @@ class Finding:
 
 
 class CreatedTicket(BaseModel):
-    """Pydantic (not a dataclass, unlike Finding) since this is an activity
-    result type handled by Temporal's pydantic data converter directly."""
-
     finding_key: str
     ticket_key: str
 

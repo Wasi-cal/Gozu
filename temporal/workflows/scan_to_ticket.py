@@ -37,8 +37,8 @@ class ScanToTicketWorkflow:
         )
         for finding in findings:
             workflow.logger.info(
-                f"  [{finding['finding_type']}] {finding['severity']} "
-                f"{finding['component']}:{finding['line']} - {finding['message']} ({finding['deep_link']})"
+                f"  [{finding.finding_type}] {finding.severity.value} "
+                f"{finding.component}:{finding.line} - {finding.message} ({finding.deep_link})"
             )
 
         ticket_result = await workflow.execute_activity(
@@ -57,7 +57,7 @@ class ScanToTicketWorkflow:
             workflow.logger.info(f"  skipped finding {finding_key} (ticket already exists)")
 
         if ticket_result.created:
-            findings_by_key = {finding["key"]: finding for finding in findings}
+            findings_by_key = {finding.key: finding for finding in findings}
 
             screenshot_results = await asyncio.gather(
                 *[

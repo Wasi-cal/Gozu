@@ -24,16 +24,14 @@ directly by the screenshot activity rather than through get_scanner_client().
 
 import asyncio
 import base64
-import logging
 import os
 from pathlib import Path
 
 from playwright.async_api import BrowserContext, async_playwright
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from temporalio import activity
 
 from core.models import Finding
-
-logger = logging.getLogger(__name__)
 
 _SOURCE_VIEWER_SELECTORS = [
     "table",
@@ -85,7 +83,7 @@ async def capture_finding_screenshot(finding: Finding, out_path: Path) -> Path:
             except PlaywrightTimeoutError:
                 continue
 
-        logger.warning(
+        activity.logger.warning(
             f"No known source-viewer selector matched for finding {finding.key}; falling back to full-page screenshot"
         )
         await page.screenshot(path=out_path, full_page=True)

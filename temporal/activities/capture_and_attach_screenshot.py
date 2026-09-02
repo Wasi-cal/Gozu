@@ -1,23 +1,19 @@
 """Activity: capture a screenshot of a finding and attach it to its ticket."""
 
-import logging
 import shutil
 import tempfile
 from pathlib import Path
 
 from temporalio import activity
 
-from core.models import Finding, Severity
 from scanner.screenshot import capture_finding_screenshot
 from temporal.models.screenshot_attach import ScreenshotAttachInput
 from ticket.client import get_ticket_client
 
-logger = logging.getLogger(__name__)
-
 
 @activity.defn
 async def capture_and_attach_screenshot_activity(input: ScreenshotAttachInput) -> None:
-    finding = Finding(**{**input.finding, "severity": Severity(input.finding["severity"])})
+    finding = input.finding
 
     tmp_dir = tempfile.mkdtemp(prefix="finding-screenshot-")
     screenshot_path = Path(tmp_dir) / f"{finding.source_tool}-{finding.key}.png"
@@ -28,7 +24,7 @@ async def capture_and_attach_screenshot_activity(input: ScreenshotAttachInput) -
         client = get_ticket_client()
         attach_screenshot = getattr(client, "attach_screenshot", None)
         if attach_screenshot is None:
-            logger.warning(
+            activity.logger.warning(
                 f"{type(client).__name__} doesn't support attach_screenshot; skipping for {input.ticket_key}"
             )
             return

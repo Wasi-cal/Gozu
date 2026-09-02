@@ -106,15 +106,22 @@ Switching from self-hosted SonarQube to SonarQube Cloud later should mean:
 1. Implementing `fetch_findings()` on `scanner/client.py`'s `SonarQubeCloudClient`.
 2. Setting `SCANNER_TYPE=sonarqube-cloud` in `.env`.
 
-**Serialization note:** `Finding` and `Severity` are a plain dataclass/Enum,
-not Pydantic models, so they don't cross the Temporal workflow/activity
-boundary automatically the way `TicketResult`/`CreatedTicket`/
-`SonarToJiraInput` (all Pydantic `BaseModel`s, handled by the Pydantic-aware
-data converter in `temporal/data_converter.py`) do.
-`fetch_findings_activity` converts each `Finding` to a `dict` with
-`dataclasses.asdict()` (plus `severity.value` for the enum) before
-returning it, and `create_tickets_activity` reconstructs `Finding` objects
-from those dicts on the way in.
+**Serialization note:** every type that crosses a Temporal workflow/activity
+boundary (`Finding`, `CreatedTicket`, `TicketResult`, `SonarToJiraInput`,
+`ScreenshotAttachInput`) is a Pydantic `BaseModel`, handled automatically by
+the Pydantic-aware data converter in `temporal/data_converter.py` - no
+manual dict conversion needed anywhere in the pipeline. `Severity` is an
+`Enum` field on `Finding`, which Pydantic serializes natively.
+
+**Logging note:** this project uses exactly one logging mechanism inside the
+Temporal-executed pipeline - `workflow.logger` in `scan_to_ticket.py`,
+`activity.logger` everywhere else that runs inside an activity (`scanner/`,
+`ticket/`, `temporal/activities/`). Both are Temporal's contextual loggers,
+so every log line is automatically tagged with workflow/activity id, run id,
+etc. Plain `logging.basicConfig`/`logging.getLogger` is used only in the two
+process entrypoints (`receiver/app.py`, `temporal/worker.py`), since there's
+no Temporal activity/workflow context to attach to before a workflow starts
+or before the worker begins running.
 
 ## Prerequisites
 
