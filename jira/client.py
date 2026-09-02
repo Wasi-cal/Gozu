@@ -162,6 +162,15 @@ class JiraClient:
                             "content": [
                                 {
                                     "type": "paragraph",
+                                    "content": [{"type": "text", "text": f"Branch: {issue.branch or 'unknown'}"}],
+                                }
+                            ],
+                        },
+                        {
+                            "type": "listItem",
+                            "content": [
+                                {
+                                    "type": "paragraph",
                                     "content": [
                                         {
                                             "type": "text",
@@ -234,3 +243,23 @@ class JiraClient:
                 files={"file": (image_path.name, f, "image/png")},
             )
         self._raise_for_status(response, "attach screenshot")
+
+    def add_comment(self, ticket_key: str, body: str) -> None:
+        """Add a comment to an existing ticket, rendering `body` as a single
+        Jira code-block node."""
+        payload = {
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {"type": "codeBlock", "attrs": {}, "content": [{"type": "text", "text": body}]}
+                ],
+            }
+        }
+        response = requests.post(
+            f"{self.base_url}/rest/api/3/issue/{ticket_key}/comment",
+            json=payload,
+            auth=self.auth,
+            headers=self.headers,
+        )
+        self._raise_for_status(response, "add comment")

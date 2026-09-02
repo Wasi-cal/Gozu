@@ -12,3 +12,4 @@ class SonarIssue(BaseModel):
     message: str
     type: str  # "VULNERABILITY" or "SECURITY_HOTSPOT"
     deep_link: str
+    branch: str | None = None

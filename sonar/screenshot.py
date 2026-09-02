@@ -22,6 +22,7 @@ import asyncio
 import base64
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from playwright.async_api import BrowserContext, TimeoutError as PlaywrightTimeoutError, async_playwright
@@ -35,6 +36,15 @@ _SOURCE_VIEWER_SELECTORS = [
     '[data-testid="source-viewer"]',
     ".source-viewer",
 ]
+
+
+
+@dataclass
+class FindingExtraction:
+    screenshot_path: Path
+    code_snippet: str | None
+    annotation_text: str | None
+
 
 _playwright = None
 _browser = None
@@ -63,7 +73,36 @@ async def _get_context() -> BrowserContext:
     return _context
 
 
-async def capture_issue_screenshot(issue: SonarIssue, out_path: Path) -> Path:
+async def _extract_code_snippet(locator, issue: SonarIssue) -> str | None:
+    try:
+        return await locator.inner_text()
+    except Exception as e:
+        logger.warning(f"Failed to extract code snippet text for issue {issue.key}: {e}")
+        return None
+
+
+async def _extract_annotation_text(page, issue: SonarIssue) -> str | None:
+    """
+    The inline issue-annotation callout is NOT a descendant of the
+    source-viewer element (confirmed live) - it's a separate `<header>`
+    rendered elsewhere in the page, whose first line of text is the issue
+    message. When multiple `<header>`s exist (e.g. the top nav bar is also
+    one), the last one is the issue-detail header.
+    """
+    try:
+        headers = page.locator("header")
+        count = await headers.count()
+        if count == 0:
+            return None
+        text = await headers.nth(count - 1).inner_text()
+        first_line = text.split("\n", 1)[0].strip()
+        return first_line or None
+    except Exception as e:
+        logger.warning(f"Failed to extract annotation text for issue {issue.key}: {e}")
+        return None
+
+
+async def capture_issue_screenshot(issue: SonarIssue, out_path: Path) -> FindingExtraction:
     context = await _get_context()
     page = await context.new_page()
 
@@ -76,7 +115,11 @@ async def capture_issue_screenshot(issue: SonarIssue, out_path: Path) -> Path:
             try:
                 await locator.wait_for(state="visible", timeout=5000)
                 await locator.screenshot(path=out_path)
-                return out_path
+                code_snippet = await _extract_code_snippet(locator, issue)
+                annotation_text = await _extract_annotation_text(page, issue)
+                return FindingExtraction(
+                    screenshot_path=out_path, code_snippet=code_snippet, annotation_text=annotation_text
+                )
             except PlaywrightTimeoutError:
                 continue
 
@@ -84,6 +127,6 @@ async def capture_issue_screenshot(issue: SonarIssue, out_path: Path) -> Path:
             f"No known source-viewer selector matched for issue {issue.key}; falling back to full-page screenshot"
         )
         await page.screenshot(path=out_path, full_page=True)
-        return out_path
+        return FindingExtraction(screenshot_path=out_path, code_snippet=None, annotation_text=None)
     finally:
         await page.close()
