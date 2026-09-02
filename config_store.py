@@ -34,7 +34,7 @@ _CONFIG_FIELDS = (
 )
 
 
-def get_connection() -> psycopg.Connection:
+def get_connection() -> psycopg.Connection[dict[str, Any]]:
     return psycopg.connect(
         host=os.environ["POSTGRES_HOST"],
         port=os.environ["POSTGRES_PORT"],
@@ -59,8 +59,9 @@ def create_config(name: str, **fields: Any) -> int:
 
     values = {field: fields.get(field) for field in _CONFIG_FIELDS}
     for field in _SECRET_FIELDS:
-        if values[field] is not None:
-            values[field] = encrypt_token(values[field])
+        plaintext = values[field]
+        if plaintext is not None:
+            values[field] = encrypt_token(plaintext)
 
     columns = ", ".join(("name", *_CONFIG_FIELDS))
     placeholders = ", ".join(("%(name)s", *(f"%({field})s" for field in _CONFIG_FIELDS)))
@@ -72,6 +73,8 @@ def create_config(name: str, **fields: Any) -> int:
         )
         row = cur.fetchone()
         conn.commit()
+        if row is None:
+            raise RuntimeError("INSERT ... RETURNING id returned no row")
         return row["id"]
 
 
