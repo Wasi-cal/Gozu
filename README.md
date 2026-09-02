@@ -137,6 +137,323 @@ process entrypoints (`receiver/app.py`, `temporal/worker.py`), since there's
 no Temporal activity/workflow context to attach to before a workflow starts
 or before the worker begins running.
 
+## Phase 1: Infrastructure
+
+This project is being rebuilt into a commercial CLI tool, working name
+`codescan` (placeholder; the repo/working directory stays `sonar-to-jira`
+until a real name is picked). This is Phase 1 of that build:
+**infrastructure only** - a Docker Compose stack that boots cleanly with
+an empty, seeded Postgres database, plus a verified encrypted credential
+store. There is no CLI wizard yet (that's Phase 2, below) - the sections
+further down (steps 1-10) describe the older, fully-manual local workflow
+and still work independently of this stack.
+
+**What got added:**
+
+- **`crypto_utils.py`** - `encrypt_token()`/`decrypt_token()` using Fernet
+  (from the `cryptography` library), keyed by a `FERNET_KEY` environment
+  variable. Raises a clear error (not a silent no-op) if `FERNET_KEY` is
+  missing or malformed.
+- **`sql/init.sql`** - two tables, deliberately normalized: `configs`
+  (one named set of scanner + ticket-backend credentials - `id`, `name`,
+  `scanner_type`, `scanner_mode`, `ticket_backend`, `trigger_mode`,
+  timestamps) and `config_credentials` (arbitrary encrypted key/value
+  pairs per config - `sonar_token`, `jira_api_token`, `webhook_secret`,
+  whatever a given backend needs). Backend-specific fields live as rows
+  in `config_credentials`, not dedicated columns on `configs`, so adding
+  a new scanner or ticket backend never needs a schema change. Called
+  "configs", not "profiles" - Docker Compose already has an unrelated
+  concept called profiles (for conditionally starting services; see the
+  `sonarqube` service below), and reusing that word here would be
+  confusing throughout the codebase and docs. Every `config_credentials`
+  value is stored as Fernet ciphertext, never plaintext. Mounted into the
+  postgres container's `/docker-entrypoint-initdb.d/`, so it runs
+  automatically the first time the `postgres_data` volume is initialized.
+- **`config_store.py`** - psycopg3-based CRUD: `create_config()` inserts
+  the `configs` row plus one `config_credentials` row per credential
+  (each encrypted), all in a single transaction; `get_config()` returns
+  the `configs` columns plus a nested, decrypted `credentials` dict, or
+  `None` for a miss (never raises); `list_configs()` returns only
+  non-secret metadata (name/scanner_type/scanner_mode/trigger_mode, for a
+  picker list, not for use); `delete_config()` cascades to
+  `config_credentials` via the FK; `count_configs()` is a plain row
+  count, used by `bootstrap_env.py`'s `FERNET_KEY` safety check below.
+  All parameterized queries, no string-built SQL.
+- **`scanner/client.py`** - `ScannerClient` gained an abstract
+  `requirements() -> ScannerRequirements` method (`docker_services`,
+  `host_dependencies`), plus a `SCANNER_REGISTRY` dict (scanner_type ->
+  display name) that's the single source of truth for "which scanners
+  exist" - the init wizard's scanner-selection prompt reads this instead
+  of hardcoding "sonarqube".
+- **`Dockerfile`** - containerizes `temporal/worker.py`, built via `uv`
+  (see Phase 2's packaging section). Sets `PYTHONUNBUFFERED=1` (otherwise
+  the worker's log lines never flush inside a container) and
+  `PYTHONPATH=/app` (so activity/scanner/ticket imports and scripts under
+  `scripts/`/`cli/` resolve without extra flags).
+- **`docker-compose.yml`**:
+  - `postgres` (`postgres:16-alpine`) and `temporal`
+    (`temporalio/admin-tools`, running `temporal server start-dev` - the
+    same one-box dev server as the CLI, just containerized) are always-on,
+    no profile tag.
+  - `sonarqube` (`sonarqube:community`) is tagged `profiles:
+    ["sonarqube-local"]`, so it only starts when that profile is
+    explicitly requested - most scanner backends (e.g. SonarQube Cloud)
+    won't need a local container at all.
+  - `worker` is built from the `Dockerfile`, always-on, and waits on both
+    `temporal` and `postgres` being `service_healthy` before starting.
+  - All four services read from the same `.env`. Host ports for
+    postgres/sonarqube/temporal/temporal's web UI are read from
+    `${POSTGRES_PORT:-5432}`/`${SONARQUBE_PORT:-9000}`/
+    `${TEMPORAL_PORT:-7233}`/`${TEMPORAL_UI_PORT:-8233}` - see
+    `bootstrap_env.py` below for how those get chosen. The container-internal
+    ports never change; only the host-side published port does.
+- **`scripts/bootstrap_env.py`** - generates/merges `.env`, field by
+  field, not all-or-nothing: `POSTGRES_USER`/`PASSWORD`/`DB`/`HOST`, the
+  four ports above, and `FERNET_KEY` are each filled in independently
+  only if missing, so re-running it is always safe and never clobbers a
+  value you (or an earlier run) already set. Ports are auto-probed with a
+  plain TCP connect and incremented past whatever's already taken on the
+  host. `FERNET_KEY` gets an extra safety check before being generated:
+  if it's missing and Postgres is reachable *and* already has encrypted
+  config rows, generation is refused (would make those rows permanently
+  unreadable) unless you pass `--force-new-key` and type `yes` at an
+  explicit confirmation prompt. The core logic (`resolve_ports()`,
+  `bootstrap_env()`) is importable, not just a script - Phase 2's
+  `codescan init` wizard calls it directly so it can show you the chosen
+  ports and let you override them before anything is written.
+- **`scripts/seed_test_config.py`** - throwaway verification script (not
+  part of the product): inserts one dummy config (config fields +
+  credentials), reads it back, and confirms every field round-tripped
+  correctly - proving the encrypt-on-write/decrypt-on-read path works end
+  to end against a real Postgres instance.
+
+### Running it
+
+1. **Generate `.env`** (once per checkout, safe to re-run any time):
+
+   ```bash
+   uv sync   # see Phase 2 below for installing uv
+   uv run python scripts/bootstrap_env.py
+   ```
+
+   It'll print whichever ports/fields it actually wrote. If you already
+   have a `.env` (e.g. with `SONAR_TOKEN`/`JIRA_*` from the older manual
+   workflow further down this README), nothing in it is touched - only
+   whatever's still missing gets added.
+
+2. **Bring up the stack:**
+
+   ```bash
+   docker compose up -d
+   ```
+
+   Add `--profile sonarqube-local` if you also want a local SonarQube
+   container:
+
+   ```bash
+   docker compose --profile sonarqube-local up -d
+   ```
+
+3. **Confirm health:**
+
+   ```bash
+   docker compose ps
+   ```
+
+   `postgres` and `temporal` should show `healthy`; `worker` should show
+   `Up` (it has no separate healthcheck - `docker compose logs worker`
+   should show `Worker started, listening on task queue 'sonar-jira-queue'...`
+   with no crash/restart loop). If you started it, `sonarqube` takes
+   30-60s+ to go `healthy` (it polls `/api/system/status` for `"UP"`).
+
+   Confirm both tables exist and are empty:
+
+   ```bash
+   docker compose exec postgres sh -c '
+     psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+       -c "SELECT count(*) FROM configs;" -c "SELECT count(*) FROM config_credentials;"
+   '
+   # count
+   # -------
+   #     0
+   ```
+
+4. **Prove the encryption round-trip:**
+
+   ```bash
+   docker compose exec worker python scripts/seed_test_config.py
+   ```
+
+   Successful output looks like:
+
+   ```
+   Creating config 'seed-test-XXXXXXXX'...
+   Created config id=1
+   Reading it back and decrypting...
+   Cleaned up config 'seed-test-XXXXXXXX'
+   SUCCESS: all 11 fields round-tripped correctly (credentials encrypted on write, decrypted on read, all values match).
+   ```
+
+   The script cleans up its own row, so both tables are empty again
+   afterward and it's safe to re-run.
+
+**`.env` must never be committed** - `.gitignore` already includes it (it
+holds the generated Postgres password, the Fernet key, and whatever real
+SonarQube/Jira credentials you fill in).
+
+## Phase 2: Setup Wizard
+
+Phase 2 adds `codescan init`: a fully interactive wizard (`cli/` package,
+built with [typer](https://typer.tiangolo.com/) for the command and
+[questionary](https://questionary.readthedocs.io/) for every select/confirm
+prompt - arrow-key menus, not typed option strings) that provisions
+`.env`, checks/installs prerequisites, walks through scanner and
+credential selection, and seeds one row via `config_store.create_config()`.
+It ends at "a named config exists in Postgres, ready to be used later" -
+`codescan run` (actually running a scan) is a later phase and is stubbed
+to say so.
+
+**What got added:**
+
+- **`cli/help_links.py`** - a `HELP_LINKS` dict mapping a wizard field
+  name to a real, current doc URL for obtaining that value (SonarQube
+  token generation, SonarQube Cloud organization key, Jira API token,
+  etc - every URL was looked up live, not guessed), plus
+  `print_help_link()`, a small helper that prints a dimmed `-> docs:
+  <url>` line before the prompt that needs it.
+- **`cli/prerequisites.py`** - `check_java()` (attempts `java -version`
+  on PATH) and `ensure_java()`: if no usable Java is found (checking a
+  previously-downloaded managed JRE first, so this doesn't redownload on
+  every run), explains that sonar-scanner needs a JVM and downloads a
+  portable Eclipse Temurin JRE build (correct for the host's OS/arch, via
+  Adoptium's API) into `~/.codescan/jre/` - no system-wide install,
+  fully contained to that directory - then confirms it's usable
+  afterward.
+- **`cli/init_wizard.py`** - the interactive flow: bootstrap `.env`
+  (showing the auto-detected ports and letting you override each one
+  before anything's written), `ensure_java()`, choose a scanner (sourced
+  from `scanner/client.py`'s `SCANNER_REGISTRY`, currently just
+  SonarQube), Local or Cloud, then:
+  - **Local** prompts for a host URL (default `http://localhost:9000`)
+    and a token, and - since local self-hosted SonarQube is exactly what
+    the existing webhook receiver (`receiver/app.py`) is built for -
+    collects a webhook secret and sets `trigger_mode="webhook"`.
+  - **Cloud** asks Free or Premium, then always collects an organization
+    key + token. **Premium** offers a webhook (secret + which branch to
+    scope, noting branch analysis is a Premium-only SonarQube Cloud
+    feature) or falls back to `trigger_mode="direct"`. **Free** can't use
+    webhooks at all (SonarQube Cloud's Free plan doesn't invoke them), so
+    instead picks a trigger mode from "Direct (your own CI)", "GitHub
+    Actions signal + poll", or "Scheduled watch polling".
+
+  Then Jira details (URL, email, API token, project key, each with a
+  help link), a config name (checked against `list_configs()` - a
+  duplicate name is rejected and re-prompted, never silently
+  overwritten), and finally `config_store.create_config(...)` with
+  whatever credentials were actually collected. The closing summary
+  prints names/modes only, never secret values.
+- **`cli/main.py`** - the `codescan` typer app, registering `init`. `run`
+  and `down` are registered too, each just printing "not yet implemented
+  - coming in a later phase", so `codescan --help` already shows the
+  tool's intended shape.
+
+**Packaging moved from pip/`requirements.txt` to
+[uv](https://docs.astral.sh/uv/):**
+
+- `pyproject.toml` declares every dependency under `[project.dependencies]`
+  and registers the `codescan` console script (`cli.main:app`).
+  `uv.lock` is the pinned-version source of truth (`requirements.txt` is
+  gone - nothing else in the repo reads it).
+- The worker `Dockerfile` now builds via `uv`: it copies the `uv`/`uvx`
+  binaries from `ghcr.io/astral-sh/uv`'s official image, then runs `uv
+  sync --frozen` against `pyproject.toml`/`uv.lock` (with
+  `UV_PROJECT_ENVIRONMENT=/usr/local`, so the installed packages and the
+  `codescan` command land directly in the image's system Python - no
+  separate venv to activate inside the container).
+
+### Installing locally
+
+```bash
+# install uv if you don't have it: https://docs.astral.sh/uv/getting-started/installation/
+uv sync
+```
+
+This creates/updates `.venv` with every dependency from `pyproject.toml`/
+`uv.lock` and installs the `codescan` command into it. Run it with `uv run
+codescan ...`, or activate the venv (`source .venv/bin/activate`) and run
+`codescan ...` directly.
+
+### Running the wizard
+
+```bash
+uv run codescan init
+```
+
+**A full Local walkthrough** looks like: accept (or override) the
+auto-detected ports -> `.env` is provisioned/merged -> Java is checked
+(and a portable JRE downloaded into `~/.codescan/jre/` if none is found)
+-> only one scanner is registered, so SonarQube is picked automatically
+-> "Local" -> host URL (default `http://localhost:9000`) + token -> a
+webhook secret (leave blank to have one generated and shown once) ->
+Jira URL/email/API token/project key -> a config name -> summary. The
+resulting config has `scanner_mode="local"`, `trigger_mode="webhook"`.
+
+**A full Cloud Free-plan walkthrough** differs after the Local/Cloud
+choice: "Cloud" -> "Free" -> organization key + token -> a note that
+webhooks aren't offered on the Free plan -> pick a trigger mode (Direct/
+GitHub Actions poll/Scheduled watch) -> Jira details -> config name ->
+summary. The resulting config has `scanner_mode="cloud"`, `trigger_mode`
+matching whichever of `direct`/`github_poll`/`watch` was chosen, and its
+credentials have `sonar_organization` but no `webhook_secret`.
+
+### Confirming success
+
+Query the tables directly (same spirit as Phase 1's
+`scripts/seed_test_config.py`, now exercised through the real wizard):
+
+```bash
+docker compose exec postgres sh -c '
+  psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+    -c "SELECT name, scanner_type, scanner_mode, trigger_mode FROM configs;" \
+    -c "SELECT config_id, key, left(value, 12) || '"'"'...'"'"' AS ciphertext_preview FROM config_credentials;"
+'
+```
+
+The `configs` row should match what you chose in the wizard; every
+`config_credentials.value` should be Fernet ciphertext (starts with
+`gAAAAAB...`), never a plaintext secret.
+
+Then confirm `get_config()` round-trips the decrypted values correctly,
+the same way `seed_test_config.py` does it:
+
+```bash
+docker compose exec worker python -c "
+import config_store
+result = config_store.get_config('<the name you gave it in the wizard>')
+print(result['scanner_type'], result['scanner_mode'], result['trigger_mode'])
+print(sorted(result['credentials'].keys()))
+"
+```
+
+If a credential you entered (e.g. the Jira project key) comes back
+exactly as typed, the wizard's encrypt-on-write/decrypt-on-read path
+works end to end.
+
+**Testing the `FERNET_KEY` safety check:** with at least one config
+already created, remove the `FERNET_KEY=...` line from `.env` and
+re-run bootstrap:
+
+```bash
+uv run python scripts/bootstrap_env.py
+```
+
+This should refuse (non-zero exit) and explain that Postgres already has
+encrypted config row(s) and no key was found - `.env` is left untouched.
+Re-running with `uv run python scripts/bootstrap_env.py --force-new-key`
+prompts for an explicit `yes` before generating a replacement key (which
+makes the earlier config's credentials permanently undecryptable - that's
+the point of the check).
+
 ## Prerequisites
 
 - Docker (for SonarQube Community Build)
@@ -290,16 +607,16 @@ zero setup cost.
 ## 6. Set up the Python environment
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-playwright install chromium
+uv sync
+uv run playwright install chromium
 cp .env.example .env
 ```
 
-`playwright install chromium` downloads Playwright's own browser binary
-(used by `scanner/screenshot.py` to screenshot flagged findings) - it's
-separate from the pip package and only needs to run once.
+`uv sync` creates/updates `.venv` from `pyproject.toml`/`uv.lock` (see
+Phase 2's packaging section above). `playwright install chromium`
+downloads Playwright's own browser binary (used by `scanner/screenshot.py`
+to screenshot flagged findings) - it's separate from the pip package and
+only needs to run once.
 
 Edit `.env` and fill in:
 
@@ -446,8 +763,8 @@ needed) - it covers `capture_finding_screenshot`'s text extraction and
 `capture_and_attach_screenshot_activity`'s dispatch/isolation logic:
 
 ```bash
-pip install -r requirements.txt  # includes pytest + pytest-asyncio
-pytest
+uv sync   # includes pytest + pytest-asyncio
+uv run pytest
 ```
 
 `pytest.ini` sets `asyncio_mode = auto` so `async def test_...` functions
@@ -524,7 +841,22 @@ tests/
   scanner/test_screenshot.py                            capture_finding_screenshot extraction tests
   temporal/activities/test_capture_and_attach_screenshot.py  activity dispatch/isolation tests
 
-requirements.txt
+cli/
+  main.py                        codescan typer app - registers init (run/down are stubs)
+  init_wizard.py                 the interactive init flow (see Phase 2 above)
+  prerequisites.py               check_java()/ensure_java() - portable JRE into ~/.codescan/jre/
+  help_links.py                  HELP_LINKS doc-URL dict + print_help_link()
+
+crypto_utils.py                  encrypt_token()/decrypt_token() (Fernet, keyed by FERNET_KEY)
+config_store.py                  configs/config_credentials CRUD (see Phase 1 above)
+sql/init.sql                     configs + config_credentials schema
+scripts/
+  bootstrap_env.py               .env field-by-field merge, port probing, FERNET_KEY safety check
+  seed_test_config.py            throwaway config_store round-trip verification script
+
+Dockerfile                       containerizes temporal/worker.py, built via uv
+docker-compose.yml               postgres/temporal/worker (always-on) + sonarqube (profile-gated)
+pyproject.toml, uv.lock          dependencies + the codescan console script (see Phase 2 above)
 pytest.ini                     asyncio_mode = auto, for the async activity/screenshot tests
 .env.example
 sonar-project.properties       Scan config for this repo (project key: sonar-to-jira)

@@ -1,7 +1,0 @@
-flask
-requests
-temporalio
-pydantic
-playwright
-pytest
-pytest-asyncio
