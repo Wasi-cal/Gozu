@@ -1,31 +1,47 @@
 """
-Minimal Jira Cloud REST API client used to create tickets for SonarQube
-issues, check whether a ticket already exists for a given issue (dedupe),
-and place newly-created tickets into the project's active sprint.
+Generic ticketing interface plus the Jira implementation.
+
+Adding a new ticket destination (Linear, GitHub Issues, whatever) means
+writing a new TicketClient subclass here and registering it in
+get_ticket_client() - nothing in core/models.py, scanner/client.py, or the
+Temporal workflow/activities/receiver needs to change.
 """
 
-import logging
+import os
+from abc import ABC, abstractmethod
 from pathlib import Path
 
 import requests
+from temporalio import activity
 
-from sonar.models import SonarIssue
+from core.models import Finding, Severity
 
-logger = logging.getLogger(__name__)
-
+# Normalized Severity -> Jira priority name.
 SEVERITY_TO_PRIORITY = {
-    "BLOCKER": "Highest",
-    "CRITICAL": "Highest",
-    "MAJOR": "High",
-    "MINOR": "Medium",
-    "INFO": "Low",
+    Severity.CRITICAL: "Highest",
+    Severity.HIGH: "High",
+    Severity.MEDIUM: "Medium",
+    Severity.LOW: "Low",
+    Severity.INFO: "Low",
 }
 DEFAULT_PRIORITY = "Medium"
 
 SUMMARY_MAX_LENGTH = 255
 
 
-class JiraClient:
+class TicketClient(ABC):
+    @abstractmethod
+    def find_existing(self, finding_key: str) -> str | None:
+        """Return the key of an existing ticket for this finding, if any (dedupe)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def create_ticket(self, finding: Finding) -> str:
+        """Create a ticket for a finding, return the new ticket's key."""
+        raise NotImplementedError
+
+
+class JiraClient(TicketClient):
     def __init__(self, base_url: str, email: str, api_token: str, project_key: str):
         self.base_url = base_url.rstrip("/")
         self.project_key = project_key
@@ -57,7 +73,9 @@ class JiraClient:
         self._raise_for_status(boards_response, "board lookup")
         boards = boards_response.json().get("values", [])
         if not boards:
-            logger.warning(f"No Agile board found for project {self.project_key}; new tickets will stay in the backlog")
+            activity.logger.warning(
+                f"No Agile board found for project {self.project_key}; new tickets will stay in the backlog"
+            )
             return None
 
         board_id = boards[0]["id"]
@@ -69,7 +87,9 @@ class JiraClient:
         self._raise_for_status(sprints_response, "sprint lookup")
         sprints = sprints_response.json().get("values", [])
         if not sprints:
-            logger.warning(f"No active sprint on board {board_id}; new tickets will stay in the backlog")
+            activity.logger.warning(
+                f"No active sprint on board {board_id}; new tickets will stay in the backlog"
+            )
             return None
 
         self._active_sprint_id = sprints[0]["id"]
@@ -88,12 +108,12 @@ class JiraClient:
         )
         self._raise_for_status(response, "add issue to sprint")
 
-    def find_existing_ticket(self, sonar_issue_key: str) -> str | None:
+    def find_existing(self, finding_key: str) -> str | None:
         """
-        Search for a Jira ticket already tagged with the sonar-key-{key}
+        Search for a Jira ticket already tagged with the source-key-{key}
         label. Returns the issue key (e.g. "PROJ-123") if found, else None.
         """
-        label = f"sonar-key-{sonar_issue_key}"
+        label = f"source-key-{finding_key}"
         jql = f'project = {self.project_key} AND labels = "{label}"'
 
         response = requests.get(
@@ -110,22 +130,23 @@ class JiraClient:
             return issues[0]["key"]
         return None
 
-    def _map_priority(self, severity: str | None) -> str:
-        if not severity or severity not in SEVERITY_TO_PRIORITY:
-            logger.warning(
-                f"Unrecognized or missing severity '{severity}', defaulting priority to '{DEFAULT_PRIORITY}'"
-            )
-            return DEFAULT_PRIORITY
-        return SEVERITY_TO_PRIORITY[severity]
+    def _map_priority(self, severity: Severity) -> str:
+        return SEVERITY_TO_PRIORITY.get(severity, DEFAULT_PRIORITY)
 
-    def _build_description_adf(self, issue: SonarIssue) -> dict:
+    def _build_summary(self, finding: Finding) -> str:
+        summary = finding.title
+        if len(summary) > SUMMARY_MAX_LENGTH:
+            summary = summary[: SUMMARY_MAX_LENGTH - 3] + "..."
+        return summary
+
+    def _build_description_adf(self, finding: Finding) -> dict:
         return {
             "type": "doc",
             "version": 1,
             "content": [
                 {
                     "type": "paragraph",
-                    "content": [{"type": "text", "text": issue.message}],
+                    "content": [{"type": "text", "text": finding.message}],
                 },
                 {
                     "type": "bulletList",
@@ -133,28 +154,16 @@ class JiraClient:
                         {
                             "type": "listItem",
                             "content": [
-                                {"type": "paragraph", "content": [{"type": "text", "text": f"Rule: {issue.rule}"}]}
-                            ],
-                        },
-                        {
-                            "type": "listItem",
-                            "content": [
                                 {
                                     "type": "paragraph",
-                                    "content": [{"type": "text", "text": f"Component: {issue.component}"}],
+                                    "content": [{"type": "text", "text": f"Component: {finding.component}"}],
                                 }
                             ],
                         },
                         {
                             "type": "listItem",
                             "content": [
-                                {"type": "paragraph", "content": [{"type": "text", "text": f"Line: {issue.line}"}]}
-                            ],
-                        },
-                        {
-                            "type": "listItem",
-                            "content": [
-                                {"type": "paragraph", "content": [{"type": "text", "text": f"Type: {issue.type}"}]}
+                                {"type": "paragraph", "content": [{"type": "text", "text": f"Line: {finding.line}"}]}
                             ],
                         },
                         {
@@ -162,7 +171,34 @@ class JiraClient:
                             "content": [
                                 {
                                     "type": "paragraph",
-                                    "content": [{"type": "text", "text": f"Branch: {issue.branch or 'unknown'}"}],
+                                    "content": [{"type": "text", "text": f"Type: {finding.finding_type}"}],
+                                }
+                            ],
+                        },
+                        {
+                            "type": "listItem",
+                            "content": [
+                                {
+                                    "type": "paragraph",
+                                    "content": [{"type": "text", "text": f"Severity: {finding.severity.value}"}],
+                                }
+                            ],
+                        },
+                        {
+                            "type": "listItem",
+                            "content": [
+                                {
+                                    "type": "paragraph",
+                                    "content": [{"type": "text", "text": f"Source: {finding.source_tool}"}],
+                                }
+                            ],
+                        },
+                        {
+                            "type": "listItem",
+                            "content": [
+                                {
+                                    "type": "paragraph",
+                                    "content": [{"type": "text", "text": f"Branch: {finding.branch or 'unknown'}"}],
                                 }
                             ],
                         },
@@ -174,8 +210,8 @@ class JiraClient:
                                     "content": [
                                         {
                                             "type": "text",
-                                            "text": issue.deep_link,
-                                            "marks": [{"type": "link", "attrs": {"href": issue.deep_link}}],
+                                            "text": finding.deep_link,
+                                            "marks": [{"type": "link", "attrs": {"href": finding.deep_link}}],
                                         }
                                     ],
                                 }
@@ -186,20 +222,16 @@ class JiraClient:
             ],
         }
 
-    def create_ticket(self, issue: SonarIssue) -> str:
-        """Create a Jira issue for a SonarQube issue, return the new issue key."""
-        summary = f"[Sonar] {issue.rule} in {issue.component}:{issue.line}"
-        if len(summary) > SUMMARY_MAX_LENGTH:
-            summary = summary[: SUMMARY_MAX_LENGTH - 3] + "..."
-
+    def create_ticket(self, finding: Finding) -> str:
+        """Create a Jira issue for a finding, return the new issue key."""
         payload = {
             "fields": {
                 "project": {"key": self.project_key},
-                "summary": summary,
+                "summary": self._build_summary(finding),
                 "issuetype": {"name": "Bug"},
-                "priority": {"name": self._map_priority(issue.severity)},
-                "labels": ["sonarqube", "security", f"sonar-key-{issue.key}"],
-                "description": self._build_description_adf(issue),
+                "priority": {"name": self._map_priority(finding.severity)},
+                "labels": ["sonarqube", "security", f"source-key-{finding.key}"],
+                "description": self._build_description_adf(finding),
             }
         }
 
@@ -221,6 +253,10 @@ class JiraClient:
         Attach a screenshot file to an existing issue. Skips the upload if a
         file with the same name is already attached, so retries of the
         calling activity don't create duplicate attachments.
+
+        Not part of the generic TicketClient contract - it's a Jira-specific
+        bonus capability, called directly by the screenshot activity rather
+        than through get_ticket_client()'s abstract interface.
         """
         get_response = requests.get(
             f"{self.base_url}/rest/api/3/issue/{issue_key}",
@@ -232,7 +268,9 @@ class JiraClient:
 
         existing = get_response.json().get("fields", {}).get("attachment", [])
         if any(attachment.get("filename") == image_path.name for attachment in existing):
-            logger.warning(f"Attachment {image_path.name} already exists on {issue_key}; skipping upload")
+            activity.logger.warning(
+                f"Attachment {image_path.name} already exists on {issue_key}; skipping upload"
+            )
             return
 
         with open(image_path, "rb") as f:
@@ -245,8 +283,14 @@ class JiraClient:
         self._raise_for_status(response, "attach screenshot")
 
     def add_comment(self, ticket_key: str, body: str) -> None:
-        """Add a comment to an existing ticket, rendering `body` as a single
-        Jira code-block node."""
+        """
+        Add a comment to an existing ticket, rendering `body` as a single
+        Jira code-block node.
+
+        Not part of the generic TicketClient contract - it's a Jira-specific
+        bonus capability, called directly by the screenshot activity rather
+        than through get_ticket_client()'s abstract interface.
+        """
         payload = {
             "body": {
                 "type": "doc",
@@ -263,3 +307,22 @@ class JiraClient:
             headers=self.headers,
         )
         self._raise_for_status(response, "add comment")
+
+
+def get_ticket_client() -> TicketClient:
+    """
+    Reads TICKET_BACKEND from the environment and builds the matching
+    TicketClient. This is the ONLY place in the codebase that should know
+    which concrete class is in use.
+    """
+    backend = os.environ.get("TICKET_BACKEND", "jira")
+
+    if backend == "jira":
+        return JiraClient(
+            base_url=os.environ["JIRA_URL"],
+            email=os.environ["JIRA_EMAIL"],
+            api_token=os.environ["JIRA_API_TOKEN"],
+            project_key=os.environ["JIRA_PROJECT_KEY"],
+        )
+    else:
+        raise ValueError(f"Unrecognized TICKET_BACKEND '{backend}'. Expected 'jira'.")

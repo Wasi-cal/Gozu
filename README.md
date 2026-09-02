@@ -10,10 +10,17 @@ SonarQube -> a second activity creates a Jira ticket for each issue that
 doesn't already have one (dedupe via a label), skipping the rest, and
 drops new tickets straight into the project's active sprint if one exists
 -> a third activity screenshots each newly-created ticket's flagged code
-in the SonarQube UI and attaches it to the ticket. The screenshot activity
-runs concurrently per ticket, with its own (more lenient) timeout and
-retry policy, and its failures are isolated per-ticket - a broken
-screenshot never fails the workflow run or affects ticket creation/dedupe.
+in the SonarQube UI, attaches it to the ticket, and (best-effort, in the
+same Playwright session) extracts the flagged code and SonarQube's inline
+issue annotation as text, posting them as a ticket comment. The screenshot
+activity runs concurrently per ticket, with its own (more lenient) timeout
+and retry policy, and its failures are isolated per-ticket - a broken
+screenshot never fails the workflow run or affects ticket creation/dedupe,
+and a failed text extraction degrades to no comment rather than failing
+the screenshot/attach step. Findings are also stamped with the git branch
+checked out in the worker's own working directory (SonarQube Community
+Build doesn't report branch info via its API) and it's surfaced in the
+ticket description.
 
 ## Architecture
 
@@ -28,56 +35,107 @@ receiver/app.py (Flask, :5001)
 Temporal server (:7233)
    |
    v
-temporal/worker.py -> temporal/workflows/sonar_to_jira.py (SonarToJiraWorkflow)
+temporal/worker.py -> temporal/workflows/scan_to_ticket.py (ScanToTicketWorkflow)
                   |
                   v
-             temporal/activities/fetch_vulnerabilities.py
+             temporal/activities/fetch_findings.py
                   |
                   v
-             sonar/interface.py (SonarClient interface)
+             scanner/client.py (ScannerClient interface)
                   |
         -------------------
         |                 |
- sonar/server_client.py   sonar/cloud_client.py (stub, NotImplementedError)
+ SonarQubeServerClient    SonarQubeCloudClient (stub, NotImplementedError)
    (self-hosted, real)
                   |
                   v
-             temporal/activities/create_jira_tickets.py
+             temporal/activities/create_tickets.py
                   |
                   v
-             jira/client.py (JiraClient)
+             ticket/client.py (TicketClient interface)
                   |
                   v
-             Jira Cloud (find_existing_ticket dedupe, then create_ticket,
+             JiraClient
+                  |
+                  v
+             Jira Cloud (find_existing dedupe, then create_ticket,
                          then add to the project's active sprint if one exists)
                   |
                   v  (for each newly-created ticket, concurrently)
              temporal/activities/capture_and_attach_screenshot.py
                   |
                   v
-             sonar/screenshot.py (Playwright, async API) -> screenshot of the
-             issue's source viewer panel
+             scanner/screenshot.py (Playwright, async API) -> screenshot of
+             the finding's source viewer panel, plus best-effort extraction
+             of the flagged code + inline issue annotation as text
                   |
                   v
-             jira/client.py (JiraClient.attach_screenshot) -> attaches
-             sonar-{issue-key}.png to the ticket
+             ticket/client.py (JiraClient.attach_screenshot) -> attaches
+             sonarqube-{finding-key}.png to the ticket, then
+             (JiraClient.add_comment) -> posts the extracted text as a
+             comment, if any was extracted
 ```
 
-The `SonarClient` abstract interface in `sonar/interface.py` is the seam
-between this project and whichever Sonar product is in use. Switching
-from self-hosted SonarQube to SonarQube Cloud later should mean:
+The pipeline is generic over which scanner and which ticketing system are
+behind it - SonarQube and Jira are just the only implementations that
+exist today.
 
-1. Implementing the two methods on `sonar/cloud_client.py`'s `SonarQubeCloudClient`.
-2. Setting `SONAR_MODE=cloud` in `.env`.
+- **`core/models.py`** defines the normalized vocabulary every adapter speaks:
+  `Severity` (CRITICAL/HIGH/MEDIUM/LOW/INFO) and `Finding`. Neither side of
+  the pipeline ever sees a tool-specific value (SonarQube's
+  BLOCKER/MAJOR/etc, or any future tool's own scale) outside its own
+  adapter.
+- **`scanner/client.py`** is the scanner extension point: `ScannerClient`
+  (ABC, one method - `fetch_findings(project_key) -> list[Finding]`),
+  implemented today by `SonarQubeServerClient` (real) and
+  `SonarQubeCloudClient` (stub, raises `NotImplementedError`), selected by
+  `get_scanner_client()` based on `SCANNER_TYPE`. Adding a new scanner
+  means implementing `ScannerClient` and registering it in
+  `get_scanner_client()` - no other file changes.
+- **`ticket/client.py`** is the ticketing extension point: `TicketClient`
+  (ABC, `find_existing(finding_key)` + `create_ticket(finding)`),
+  implemented today by `JiraClient`, selected by `get_ticket_client()`
+  based on `TICKET_BACKEND`. Adding a new ticket destination means
+  implementing `TicketClient` and registering it in `get_ticket_client()`
+  - no other file changes.
 
-Nothing in the `temporal/` package or `receiver/` should need to change.
+Nothing in the `temporal/` package or `receiver/` needs to change to add a
+new scanner or ticket backend - they only ever talk to `ScannerClient` /
+`TicketClient` / `Finding`.
 
-All data crossing a boundary (Sonar issues, Jira ticket results, workflow
-input) is a Pydantic `BaseModel` (`sonar/models.py`, `jira/models.py`,
-`temporal/models/sonar_to_jira.py`), not a plain dict or dataclass -
-Temporal is configured with a Pydantic-aware data converter
-(`temporal/data_converter.py`) so these serialize automatically across the
-workflow/activity boundary with no manual `.model_dump()`/`asdict()` calls.
+Screenshot capture/attach and text extraction/comment (`scanner/screenshot.py`,
+`ticket/client.py`'s `attach_screenshot` and `add_comment`) are bonus
+capabilities layered on top, not part of either abstract interface - they're
+called directly from `capture_and_attach_screenshot_activity` rather than
+through `get_scanner_client()`/`get_ticket_client()`, since they're specific
+to SonarQube's UI and Jira's attachment/comment APIs and aren't guaranteed
+to exist on every future scanner/ticket backend. `capture_finding_screenshot`
+returns a `FindingExtraction` (screenshot path + best-effort code
+snippet/annotation text); `attach_screenshot` and `add_comment` are each
+dispatched independently via `getattr()`, so a future `TicketClient` missing
+either one just skips that step instead of crashing.
+
+Switching from self-hosted SonarQube to SonarQube Cloud later should mean:
+
+1. Implementing `fetch_findings()` on `scanner/client.py`'s `SonarQubeCloudClient`.
+2. Setting `SCANNER_TYPE=sonarqube-cloud` in `.env`.
+
+**Serialization note:** every type that crosses a Temporal workflow/activity
+boundary (`Finding`, `CreatedTicket`, `TicketResult`, `SonarToJiraInput`,
+`ScreenshotAttachInput`) is a Pydantic `BaseModel`, handled automatically by
+the Pydantic-aware data converter in `temporal/data_converter.py` - no
+manual dict conversion needed anywhere in the pipeline. `Severity` is an
+`Enum` field on `Finding`, which Pydantic serializes natively.
+
+**Logging note:** this project uses exactly one logging mechanism inside the
+Temporal-executed pipeline - `workflow.logger` in `scan_to_ticket.py`,
+`activity.logger` everywhere else that runs inside an activity (`scanner/`,
+`ticket/`, `temporal/activities/`). Both are Temporal's contextual loggers,
+so every log line is automatically tagged with workflow/activity id, run id,
+etc. Plain `logging.basicConfig`/`logging.getLogger` is used only in the two
+process entrypoints (`receiver/app.py`, `temporal/worker.py`), since there's
+no Temporal activity/workflow context to attach to before a workflow starts
+or before the worker begins running.
 
 ## Prerequisites
 
@@ -117,8 +175,8 @@ sonar-scanner -Dsonar.token=<your-token>
 
 This uses the `sonar-project.properties` at the repo root (project key
 `sonar-to-jira`, `.venv`/`__pycache__`/`.git`/`.ruff_cache` excluded) and
-scans the actual pipeline code (`receiver/`, `temporal/`, `sonar/`,
-`jira/`). After it finishes, refresh the SonarQube UI - you should see
+scans the actual pipeline code (`receiver/`, `temporal/`, `core/`,
+`scanner/`, `ticket/`). After it finishes, refresh the SonarQube UI - you should see
 the project with a handful of flagged issues (e.g. CSRF disabled on the
 webhook route, the Flask debugger left on).
 
@@ -214,7 +272,7 @@ curl -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
 ```
 
 **New tickets land in the active sprint automatically, if one exists.**
-`jira/client.py` looks up the project's (first) Agile board and its
+`ticket/client.py`'s `JiraClient` looks up the project's (first) Agile board and its
 active sprint, and moves each newly-created ticket into it. If there's no
 active sprint running, tickets fall back to the backlog (not an error,
 just a log warning) - start a sprint on your board if you want to see
@@ -226,7 +284,7 @@ permissions, works immediately on a brand-new free-tier project. A
 custom field would need to be created and explicitly added to the
 project's screen/permission scheme before the API could read or write it,
 which is extra one-time admin work per project. For a personal POC, a
-label (`sonar-key-{sonar_issue_key}`) gets the same dedupe behavior for
+label (`source-key-{finding_key}`) gets the same dedupe behavior for
 zero setup cost.
 
 ## 6. Set up the Python environment
@@ -240,14 +298,15 @@ cp .env.example .env
 ```
 
 `playwright install chromium` downloads Playwright's own browser binary
-(used by `sonar/screenshot.py` to screenshot flagged issues) - it's
+(used by `scanner/screenshot.py` to screenshot flagged findings) - it's
 separate from the pip package and only needs to run once.
 
 Edit `.env` and fill in:
 
 - `SONAR_WEBHOOK_SECRET` - matches the secret you set on the webhook
 - `SONAR_TOKEN` - the token from step 2
-- Leave `SONAR_MODE=local` and `SONAR_HOST_URL=http://localhost:9000` as-is
+- Leave `SCANNER_TYPE=sonarqube` and `SONAR_HOST_URL=http://localhost:9000` as-is
+- Leave `TICKET_BACKEND=jira` as-is
 - `JIRA_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY` - from step 5
 
 Because `.env` isn't loaded automatically by these scripts, load it into
@@ -289,9 +348,9 @@ http://localhost:8233 where you can watch workflow executions.
 
 In another terminal (with the venv activated and `.env` sourced). Run it
 as a module from the repo root, not as a script - the package imports
-(`from temporal.activities... import ...`, `from sonar.models import
-...`) only resolve when the repo root is on `sys.path`, which `-m` gives
-you automatically:
+(`from temporal.activities... import ...`, `from core.models import ...`) only
+resolve when the repo root is on `sys.path`, which `-m` gives you
+automatically:
 
 ```bash
 python -m temporal.worker
@@ -318,36 +377,36 @@ sonar-scanner -Dsonar.token=<your-token>
 ```
 
 When the analysis finishes, SonarQube fires the webhook -> `receiver/app.py`
-verifies the signature -> starts `SonarToJiraWorkflow` -> the workflow
-calls `fetch_vulnerabilities_activity` (hits SonarQube via
-`SonarQubeServerClient`) -> then `create_jira_tickets_activity` (hits
-Jira via `JiraClient`, checking `find_existing_ticket` before creating
+verifies the signature -> starts `ScanToTicketWorkflow` -> the workflow
+calls `fetch_findings_activity` (hits SonarQube via
+`SonarQubeServerClient`) -> then `create_tickets_activity` (hits
+Jira via `JiraClient`, checking `find_existing` before creating
 anything) -> results are logged.
 
 ### How to confirm success
 
 1. **Temporal Web UI** (http://localhost:8233) - find the workflow run and
-   confirm it **Completed**. There are now three activities in the run,
-   not two: `fetch_vulnerabilities_activity`, `create_jira_tickets_activity`
-   (should show a `created` list with one entry per flagged issue and an
-   empty `skipped` list on a first run), and one
-   `capture_and_attach_screenshot_activity` per created ticket. A failure
-   on the screenshot activity (visible per-activity in the UI) does not
-   turn the overall workflow result into a failure.
+   confirm it **Completed**. There are three activities in the run:
+   `fetch_findings_activity`, `create_tickets_activity` (should show a
+   `created` list with one entry per flagged finding and an empty `skipped`
+   list on a first run), and one `capture_and_attach_screenshot_activity`
+   per created ticket. A failure on the screenshot activity (visible
+   per-activity in the UI) does not turn the overall workflow result into
+   a failure.
 2. **worker terminal** (`python -m temporal.worker`) - look for lines like:
    ```
-   Jira: created 1 ticket(s), skipped 0 already-ticketed issue(s)
-     created SONAR-1 for sonar issue AbCdEfGh...
+   Tickets: created 1 ticket(s), skipped 0 already-ticketed finding(s)
+     created SONAR-1 for finding AbCdEfGh...
      attached screenshot to SONAR-1
    ```
 3. **Jira** - open your project in Jira Cloud, confirm new ticket(s)
-   appeared with summary `[Sonar] ... in <file>:<line>`, type `Bug`, and
+   appeared with a descriptive summary, type `Bug`, and
    labels including `sonarqube`, `security`, and a
-   `sonar-key-<sonar-issue-key>` label. If your project has an **active
+   `source-key-<finding-key>` label. If your project has an **active
    sprint**, the ticket lands directly on the **Board** tab; if not, it's
    in the **Backlog** tab instead (new tickets never appear on the board
    without an active sprint to put them in). Also confirm the ticket has a
-   `sonar-{issue-key}.png` attachment showing the flagged code.
+   `sonarqube-{finding-key}.png` attachment showing the flagged code.
 
 ### Verifying dedupe (no duplicate tickets on a re-scan)
 
@@ -362,23 +421,37 @@ anything) -> results are logged.
 2. Watch the worker terminal for the second run. You should now see
    something like:
    ```
-   Jira: created 0 ticket(s), skipped 2 already-ticketed issue(s)
-     skipped sonar issue AbCdEfGh... (ticket already exists)
-     skipped sonar issue ZyXwVuTs... (ticket already exists)
+   Tickets: created 0 ticket(s), skipped 2 already-ticketed finding(s)
+     skipped finding AbCdEfGh... (ticket already exists)
+     skipped finding ZyXwVuTs... (ticket already exists)
    ```
-   The `skipped` count should match the number of issues that had tickets
+   The `skipped` count should match the number of findings that had tickets
    from the previous run, and `created` should be empty (assuming no new
-   issues were introduced).
+   findings were introduced).
 3. Cross-check in Temporal Web UI: open the second workflow execution's
    result and confirm `created` is `[]` and `skipped` contains the same
-   Sonar issue keys from the first run.
+   finding keys from the first run.
 4. Cross-check in Jira: refresh the project board and confirm there's
-   still exactly one ticket per `sonar-key-<key>` label - no duplicates.
+   still exactly one ticket per `source-key-<key>` label - no duplicates.
 
 If you want to force a *new* ticket to prove dedupe isn't just "always
 skip," introduce a new flagged issue somewhere in the codebase, re-scan,
 and confirm exactly one new ticket is created for it while the existing
 issues are still reported as skipped.
+
+## Running the unit tests
+
+The `tests/` suite is fully mocked (no SonarQube/Jira/Temporal server
+needed) - it covers `capture_finding_screenshot`'s text extraction and
+`capture_and_attach_screenshot_activity`'s dispatch/isolation logic:
+
+```bash
+pip install -r requirements.txt  # includes pytest + pytest-asyncio
+pytest
+```
+
+`pytest.ini` sets `asyncio_mode = auto` so `async def test_...` functions
+run without per-test `@pytest.mark.asyncio` decorators.
 
 ## Testing the receiver without a real SonarQube webhook
 
@@ -413,43 +486,55 @@ requests.post(
 receiver/
   app.py                       Flask app: POST /webhooks/sonarqube route only
   verify_signature.py          HMAC-SHA256 webhook signature verification
-  starter.py                   Connects to Temporal and starts SonarToJiraWorkflow
+  starter.py                   Connects to Temporal and starts ScanToTicketWorkflow
 
 temporal/
   worker.py                    Temporal worker entrypoint (task queue: sonar-jira-queue)
   data_converter.py            TASK_QUEUE constant + the Pydantic-aware data converter
   activities/
-    fetch_vulnerabilities.py   fetch_vulnerabilities_activity (calls the Sonar interface)
-    create_jira_tickets.py     create_jira_tickets_activity (dedupe + create via JiraClient)
-    capture_and_attach_screenshot.py  capture_and_attach_screenshot_activity (screenshot + attach via Playwright/JiraClient)
+    fetch_findings.py          fetch_findings_activity (calls the ScannerClient interface,
+                                stamps each Finding.branch from the worker's local git state)
+    create_tickets.py          create_tickets_activity (dedupe + create via the TicketClient interface)
+    capture_and_attach_screenshot.py  capture_and_attach_screenshot_activity (screenshot + attach +
+                                extracted-text comment, bonus capability)
   workflows/
-    sonar_to_jira.py           SonarToJiraWorkflow
+    scan_to_ticket.py          ScanToTicketWorkflow
   models/
     sonar_to_jira.py           SonarToJiraInput (the workflow's input model)
     screenshot_attach.py       ScreenshotAttachInput (the screenshot activity's input model)
 
-sonar/
-  models.py                    SonarIssue (Pydantic BaseModel)
-  interface.py                 SonarClient (ABC) - the Sonar/Cloud seam
-  server_client.py             SonarQubeServerClient - real, self-hosted implementation
-  cloud_client.py               SonarQubeCloudClient - stub, raises NotImplementedError
-  factory.py                    get_sonar_client() - picks a client based on SONAR_MODE
-  screenshot.py                 capture_issue_screenshot (Playwright, async API)
+core/
+  models.py                    Finding (incl. branch), Severity (normalized vocabulary),
+                                CreatedTicket, TicketResult
 
-jira/
-  client.py                    JiraClient: find_existing_ticket (dedupe) + create_ticket + active-sprint assignment + attach_screenshot
-  models.py                    CreatedTicket, JiraTicketResult (Pydantic BaseModel)
+scanner/
+  client.py                    ScannerClient (ABC) - the scanner extension point.
+                                SonarQubeServerClient (real) + SonarQubeCloudClient (stub) +
+                                get_scanner_client() (picks one based on SCANNER_TYPE)
+  screenshot.py                 capture_finding_screenshot (Playwright, async API) - bonus capability,
+                                returns a FindingExtraction (screenshot path + best-effort
+                                code snippet/annotation text)
+
+ticket/
+  client.py                    TicketClient (ABC) - the ticket extension point.
+                                JiraClient (+ its attach_screenshot and add_comment bonus methods) +
+                                get_ticket_client() (picks one based on TICKET_BACKEND)
+
+tests/
+  scanner/test_screenshot.py                            capture_finding_screenshot extraction tests
+  temporal/activities/test_capture_and_attach_screenshot.py  activity dispatch/isolation tests
 
 requirements.txt
+pytest.ini                     asyncio_mode = auto, for the async activity/screenshot tests
 .env.example
 sonar-project.properties       Scan config for this repo (project key: sonar-to-jira)
 ```
 
-Every package (`receiver/`, `temporal/`, `sonar/`, `jira/`) is a plain
-Python package (has an `__init__.py`), and the two entrypoints
-(`temporal/worker.py`, `receiver/app.py`) must be run with `python -m` from
-the repo root so their `from sonar...`/`from jira...`/`from temporal...`
-imports resolve - see steps 8 and 9.
+Every top-level package (`receiver/`, `temporal/`, `core/`, `scanner/`,
+`ticket/`) has an `__init__.py`, and the two entrypoints
+(`temporal/worker.py`, `receiver/app.py`) must be run with `python -m`
+from the repo root so their `from core...`/`from scanner...`/
+`from ticket...`/`from temporal...` imports resolve - see steps 8 and 9.
 
 ## What's not built yet
 

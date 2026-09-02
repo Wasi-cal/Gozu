@@ -1,6 +1,7 @@
 """
-Captures a screenshot of a SonarQube issue's source-viewer panel using
-Playwright.
+Captures a screenshot of a SonarQube finding's source-viewer panel using
+Playwright, plus (best-effort) the flagged code and SonarQube's inline
+issue annotation as text.
 
 Uses Playwright's async API rather than its sync API (unlike the rest of
 this codebase, which calls `requests` synchronously from inside `async def`
@@ -16,20 +17,23 @@ state is then resolved client-side), so that challenge never happens and
 `http_credentials` silently never sends the header at all - confirmed live,
 it renders the login page. Forcing the header on every request sidesteps
 that entirely.
+
+Not part of the generic ScannerClient contract - it's a SonarQube-specific
+bonus capability (Sonar's deep-link URL shape, SONAR_TOKEN auth), called
+directly by the screenshot activity rather than through get_scanner_client().
 """
 
 import asyncio
 import base64
-import logging
 import os
-from dataclasses import dataclass
 from pathlib import Path
 
-from playwright.async_api import BrowserContext, TimeoutError as PlaywrightTimeoutError, async_playwright
+from playwright.async_api import BrowserContext, async_playwright
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from pydantic import BaseModel
+from temporalio import activity
 
-from sonar.models import SonarIssue
-
-logger = logging.getLogger(__name__)
+from core.models import Finding
 
 _SOURCE_VIEWER_SELECTORS = [
     "table",
@@ -38,9 +42,7 @@ _SOURCE_VIEWER_SELECTORS = [
 ]
 
 
-
-@dataclass
-class FindingExtraction:
+class FindingExtraction(BaseModel):
     screenshot_path: Path
     code_snippet: str | None
     annotation_text: str | None
@@ -73,15 +75,18 @@ async def _get_context() -> BrowserContext:
     return _context
 
 
-async def _extract_code_snippet(locator, issue: SonarIssue) -> str | None:
+async def _extract_code_snippet(locator, finding: Finding) -> str | None:
+    # Deliberately broad: this is best-effort text extraction layered on top
+    # of the screenshot, and any failure here (Playwright or otherwise)
+    # should degrade to None rather than fail the activity.
     try:
         return await locator.inner_text()
-    except Exception as e:
-        logger.warning(f"Failed to extract code snippet text for issue {issue.key}: {e}")
+    except Exception as e:  # noqa: BLE001
+        activity.logger.warning(f"Failed to extract code snippet text for finding {finding.key}: {e}")
         return None
 
 
-async def _extract_annotation_text(page, issue: SonarIssue) -> str | None:
+async def _extract_annotation_text(page, finding: Finding) -> str | None:
     """
     The inline issue-annotation callout is NOT a descendant of the
     source-viewer element (confirmed live) - it's a separate `<header>`
@@ -97,17 +102,17 @@ async def _extract_annotation_text(page, issue: SonarIssue) -> str | None:
         text = await headers.nth(count - 1).inner_text()
         first_line = text.split("\n", 1)[0].strip()
         return first_line or None
-    except Exception as e:
-        logger.warning(f"Failed to extract annotation text for issue {issue.key}: {e}")
+    except Exception as e:  # noqa: BLE001 - best-effort extraction, see _extract_code_snippet
+        activity.logger.warning(f"Failed to extract annotation text for finding {finding.key}: {e}")
         return None
 
 
-async def capture_issue_screenshot(issue: SonarIssue, out_path: Path) -> FindingExtraction:
+async def capture_finding_screenshot(finding: Finding, out_path: Path) -> FindingExtraction:
     context = await _get_context()
     page = await context.new_page()
 
     try:
-        target_url = issue.deep_link + f"&open={issue.key}"
+        target_url = finding.deep_link + f"&open={finding.key}"
         await page.goto(target_url, wait_until="networkidle", timeout=30000)
 
         for selector in _SOURCE_VIEWER_SELECTORS:
@@ -115,16 +120,16 @@ async def capture_issue_screenshot(issue: SonarIssue, out_path: Path) -> Finding
             try:
                 await locator.wait_for(state="visible", timeout=5000)
                 await locator.screenshot(path=out_path)
-                code_snippet = await _extract_code_snippet(locator, issue)
-                annotation_text = await _extract_annotation_text(page, issue)
+                code_snippet = await _extract_code_snippet(locator, finding)
+                annotation_text = await _extract_annotation_text(page, finding)
                 return FindingExtraction(
                     screenshot_path=out_path, code_snippet=code_snippet, annotation_text=annotation_text
                 )
             except PlaywrightTimeoutError:
                 continue
 
-        logger.warning(
-            f"No known source-viewer selector matched for issue {issue.key}; falling back to full-page screenshot"
+        activity.logger.warning(
+            f"No known source-viewer selector matched for finding {finding.key}; falling back to full-page screenshot"
         )
         await page.screenshot(path=out_path, full_page=True)
         return FindingExtraction(screenshot_path=out_path, code_snippet=None, annotation_text=None)

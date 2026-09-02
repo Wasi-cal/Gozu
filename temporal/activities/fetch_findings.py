@@ -1,11 +1,11 @@
-"""Activity: fetch vulnerabilities + security hotspots for a project via the Sonar interface."""
+"""Activity: fetch findings for a project via the ScannerClient interface."""
 
 import subprocess
 
 from temporalio import activity
 
-from sonar.factory import get_sonar_client
-from sonar.models import SonarIssue
+from core.models import Finding
+from scanner.client import get_scanner_client
 
 
 def _get_git_branch() -> str | None:
@@ -24,20 +24,17 @@ def _get_git_branch() -> str | None:
             check=True,
         )
         return result.stdout.strip() or None
-    except Exception:
+    except Exception:  # noqa: BLE001 - branch is best-effort metadata, never worth failing the fetch over
         return None
 
 
 @activity.defn
-async def fetch_vulnerabilities_activity(project_key: str) -> list[SonarIssue]:
-    client = get_sonar_client()
-
-    vulnerabilities = client.fetch_vulnerabilities(project_key)
-    hotspots = client.fetch_hotspots(project_key)
-    issues = vulnerabilities + hotspots
+async def fetch_findings_activity(project_key: str) -> list[Finding]:
+    client = get_scanner_client()
+    findings = client.fetch_findings(project_key)
 
     branch = _get_git_branch()
-    for issue in issues:
-        issue.branch = branch
+    for finding in findings:
+        finding.branch = branch
 
-    return issues
+    return findings

@@ -1,0 +1,87 @@
+"""Workflow orchestrating the scan -> ticket pipeline, generic over which scanner/ticket backend is behind it."""
+
+import asyncio
+from datetime import timedelta
+
+from temporalio import workflow
+from temporalio.common import RetryPolicy
+
+from temporal.models.sonar_to_jira import SonarToJiraInput
+
+with workflow.unsafe.imports_passed_through():
+    from core.models import TicketResult
+    from temporal.activities.capture_and_attach_screenshot import (
+        capture_and_attach_screenshot_activity,
+    )
+    from temporal.activities.create_tickets import create_tickets_activity
+    from temporal.activities.fetch_findings import fetch_findings_activity
+    from temporal.models.screenshot_attach import ScreenshotAttachInput
+
+
+@workflow.defn
+class ScanToTicketWorkflow:
+    @workflow.run
+    async def run(self, input: SonarToJiraInput) -> TicketResult:
+        workflow.logger.info(
+            f"Starting ScanToTicketWorkflow for project_key={input.project_key} task_id={input.task_id}"
+        )
+
+        findings = await workflow.execute_activity(
+            fetch_findings_activity,
+            input.project_key,
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+
+        workflow.logger.info(
+            f"Fetched {len(findings)} findings for project_key={input.project_key}"
+        )
+        for finding in findings:
+            workflow.logger.info(
+                f"  [{finding.finding_type}] {finding.severity.value} "
+                f"{finding.component}:{finding.line} - {finding.message} ({finding.deep_link})"
+            )
+
+        ticket_result = await workflow.execute_activity(
+            create_tickets_activity,
+            findings,
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+
+        workflow.logger.info(
+            f"Tickets: created {len(ticket_result.created)} ticket(s), "
+            f"skipped {len(ticket_result.skipped)} already-ticketed finding(s)"
+        )
+        for entry in ticket_result.created:
+            workflow.logger.info(f"  created {entry.ticket_key} for finding {entry.finding_key}")
+        for finding_key in ticket_result.skipped:
+            workflow.logger.info(f"  skipped finding {finding_key} (ticket already exists)")
+
+        if ticket_result.created:
+            findings_by_key = {finding.key: finding for finding in findings}
+
+            screenshot_results = await asyncio.gather(
+                *[
+                    workflow.execute_activity(
+                        capture_and_attach_screenshot_activity,
+                        ScreenshotAttachInput(
+                            finding=findings_by_key[entry.finding_key],
+                            ticket_key=entry.ticket_key,
+                        ),
+                        start_to_close_timeout=timedelta(seconds=45),
+                        retry_policy=RetryPolicy(maximum_attempts=2),
+                    )
+                    for entry in ticket_result.created
+                ],
+                return_exceptions=True,
+            )
+
+            for entry, result in zip(ticket_result.created, screenshot_results):
+                if isinstance(result, BaseException):
+                    workflow.logger.warning(
+                        f"Screenshot capture/attach failed for {entry.ticket_key} "
+                        f"(finding {entry.finding_key}): {result}"
+                    )
+                else:
+                    workflow.logger.info(f"  attached screenshot to {entry.ticket_key}")
+
+        return ticket_result

@@ -1,20 +1,21 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import sonar.screenshot as screenshot_module
-from sonar.models import SonarIssue
-from sonar.screenshot import FindingExtraction, capture_issue_screenshot
+import scanner.screenshot as screenshot_module
+from core.models import Finding, Severity
+from scanner.screenshot import FindingExtraction, capture_finding_screenshot
 
 
-def make_issue() -> SonarIssue:
-    return SonarIssue(
+def make_finding() -> Finding:
+    return Finding(
         key="ABC-1",
-        rule="python:S1",
-        severity="MAJOR",
+        title="Vulnerability [S1]: some message (file.py:1)",
+        severity=Severity.HIGH,
         component="proj:file.py",
         line=1,
         message="some message",
-        type="VULNERABILITY",
+        finding_type="vulnerability",
         deep_link="http://localhost:9090/project/issues?id=proj",
+        source_tool="sonarqube",
     )
 
 
@@ -66,13 +67,13 @@ def patch_context(page):
     return patch.object(screenshot_module, "_get_context", AsyncMock(return_value=context))
 
 
-async def test_capture_issue_screenshot_extracts_code_snippet(tmp_path):
+async def test_capture_finding_screenshot_extracts_code_snippet(tmp_path):
     locator = make_source_locator(inner_text_result="print('hi')")
     page = make_page(locator)
     out_path = tmp_path / "out.png"
 
     with patch_context(page):
-        result = await capture_issue_screenshot(make_issue(), out_path)
+        result = await capture_finding_screenshot(make_finding(), out_path)
 
     assert isinstance(result, FindingExtraction)
     assert result.screenshot_path == out_path
@@ -80,31 +81,31 @@ async def test_capture_issue_screenshot_extracts_code_snippet(tmp_path):
     locator.inner_text.assert_awaited_once()
 
 
-async def test_capture_issue_screenshot_handles_inner_text_failure(tmp_path):
+async def test_capture_finding_screenshot_handles_inner_text_failure(tmp_path):
     locator = make_source_locator(inner_text_side_effect=Exception("boom"))
     page = make_page(locator)
     out_path = tmp_path / "out.png"
 
     with patch_context(page):
-        result = await capture_issue_screenshot(make_issue(), out_path)
+        result = await capture_finding_screenshot(make_finding(), out_path)
 
     assert result.screenshot_path == out_path
     assert result.code_snippet is None
 
 
-async def test_capture_issue_screenshot_annotation_text_none_when_no_header_present(tmp_path):
+async def test_capture_finding_screenshot_annotation_text_none_when_no_header_present(tmp_path):
     locator = make_source_locator(inner_text_result="code")
     page = make_page(locator, header_texts=())
     out_path = tmp_path / "out.png"
 
     with patch_context(page):
-        result = await capture_issue_screenshot(make_issue(), out_path)
+        result = await capture_finding_screenshot(make_finding(), out_path)
 
     assert result.annotation_text is None
     assert result.code_snippet == "code"
 
 
-async def test_capture_issue_screenshot_annotation_text_captured(tmp_path):
+async def test_capture_finding_screenshot_annotation_text_captured(tmp_path):
     locator = make_source_locator(inner_text_result="code")
     # First header is the page-level nav; the last one is the issue-detail
     # header, whose first line is the annotation message.
@@ -115,18 +116,18 @@ async def test_capture_issue_screenshot_annotation_text_captured(tmp_path):
     out_path = tmp_path / "out.png"
 
     with patch_context(page):
-        result = await capture_issue_screenshot(make_issue(), out_path)
+        result = await capture_finding_screenshot(make_finding(), out_path)
 
     assert result.annotation_text == "Fix this issue."
     assert result.code_snippet == "code"
 
 
-async def test_capture_issue_screenshot_annotation_extraction_failure_returns_none(tmp_path):
+async def test_capture_finding_screenshot_annotation_extraction_failure_returns_none(tmp_path):
     locator = make_source_locator(inner_text_result="code")
 
     def locator_fn(selector):
         if selector == "header":
-            raise Exception("boom")
+            raise RuntimeError("boom")
         return locator
 
     page = make_page(locator)
@@ -134,7 +135,7 @@ async def test_capture_issue_screenshot_annotation_extraction_failure_returns_no
     out_path = tmp_path / "out.png"
 
     with patch_context(page):
-        result = await capture_issue_screenshot(make_issue(), out_path)
+        result = await capture_finding_screenshot(make_finding(), out_path)
 
     assert result.annotation_text is None
     assert result.code_snippet == "code"

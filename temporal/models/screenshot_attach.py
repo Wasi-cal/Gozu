@@ -2,9 +2,9 @@
 
 from pydantic import BaseModel
 
-from sonar.models import SonarIssue
+from core.models import Finding
 
 
 class ScreenshotAttachInput(BaseModel):
-    sonar_issue: SonarIssue
-    jira_issue_key: str
+    finding: Finding
+    ticket_key: str

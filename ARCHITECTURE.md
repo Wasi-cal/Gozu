@@ -12,14 +12,15 @@ it behaves.
 SonarQube analyzes a project and fires a webhook. A Flask receiver
 verifies the webhook's signature and starts a Temporal workflow. That
 workflow fetches the project's open vulnerabilities and security
-hotspots from SonarQube, creates a Jira ticket for each one that doesn't
-already have one (deduping via a label), and then — for every ticket it
-just created — concurrently captures a screenshot of the flagged code in
-SonarQube's UI, extracts the code and SonarQube's inline annotation as
-text, attaches the screenshot to the ticket, and posts the extracted
-text as a comment. A broken screenshot can never affect ticket creation
-or dedupe; that isolation is the central design constraint of the whole
-system.
+hotspots from SonarQube (via the generic `ScannerClient` interface),
+creates a Jira ticket for each one that doesn't already have one
+(deduping via a label, via the generic `TicketClient` interface), and
+then — for every ticket it just created — concurrently captures a
+screenshot of the flagged code in SonarQube's UI, extracts the code and
+SonarQube's inline annotation as text, attaches the screenshot to the
+ticket, and posts the extracted text as a comment. A broken screenshot
+can never affect ticket creation or dedupe; that isolation is the
+central design constraint of the whole system.
 
 ## Architecture
 
@@ -29,26 +30,26 @@ SonarQube (Docker, self-hosted Community Build)
    v
 receiver/app.py (Flask, :5001)
    |  verify_signature.py checks the HMAC signature
-   |  starter.py connects to Temporal and starts SonarToJiraWorkflow
+   |  starter.py connects to Temporal and starts ScanToTicketWorkflow
    v
 Temporal server (:7233)
    v
-temporal/worker.py -> temporal/workflows/sonar_to_jira.py (SonarToJiraWorkflow)
+temporal/worker.py -> temporal/workflows/scan_to_ticket.py (ScanToTicketWorkflow)
    |
-   |--1--> temporal/activities/fetch_vulnerabilities.py
-   |         -> sonar/factory.py picks a SonarClient (sonar/interface.py)
-   |         -> sonar/server_client.py hits SonarQube's REST API
-   |         -> stamps issue.branch from local git state
+   |--1--> temporal/activities/fetch_findings.py
+   |         -> scanner/client.py's get_scanner_client() picks a ScannerClient
+   |         -> SonarQubeServerClient hits SonarQube's REST API
+   |         -> stamps finding.branch from local git state
    |
-   |--2--> temporal/activities/create_jira_tickets.py
-   |         -> jira/client.py: find_existing_ticket (dedupe) -> create_ticket
+   |--2--> temporal/activities/create_tickets.py
+   |         -> ticket/client.py: find_existing (dedupe) -> create_ticket
    |         -> new tickets get moved into the active sprint, if one exists
    |
    |--3--> (fanned out concurrently, once per ticket just created)
              temporal/activities/capture_and_attach_screenshot.py
-               -> sonar/screenshot.py: Playwright screenshots the issue's
+               -> scanner/screenshot.py: Playwright screenshots the finding's
                   source-viewer panel AND extracts code + annotation text
-               -> jira/client.py: attach_screenshot (idempotent) + add_comment
+               -> ticket/client.py: attach_screenshot (idempotent) + add_comment
 ```
 
 Activities 1 and 2 run sequentially with the SDK's default retry policy
@@ -68,34 +69,36 @@ screenshot is not worth retrying aggressively.
    `X-Sonar-Webhook-HMAC-SHA256` header. A mismatch or missing header
    returns `401` and stops there.
 3. `receiver/starter.py` connects to the Temporal server and starts
-   `SonarToJiraWorkflow` with the project key and the webhook's `taskId`
+   `ScanToTicketWorkflow` with the project key and the webhook's `taskId`
    (used to build a deterministic workflow ID:
    `sonar-to-jira-{project_key}-{task_id}`, so re-delivering the same
    webhook doesn't start a duplicate workflow run).
-4. The workflow's first activity, `fetch_vulnerabilities_activity`, asks
-   `sonar/factory.get_sonar_client()` for a `SonarClient` (currently
-   always `SonarQubeServerClient`, since `SONAR_MODE=local`), which hits
-   `/api/issues/search` (type=VULNERABILITY) and `/api/hotspots/search`
-   (status=TO_REVIEW) and turns the raw JSON into `SonarIssue` objects.
-   Before returning, it stamps every issue's `branch` field by shelling
-   out to `git rev-parse --abbrev-ref HEAD` in the worker's own working
+4. The workflow's first activity, `fetch_findings_activity`, asks
+   `scanner/client.py`'s `get_scanner_client()` for a `ScannerClient`
+   (currently always `SonarQubeServerClient`, since `SCANNER_TYPE=sonarqube`),
+   whose `fetch_findings()` hits `/api/issues/search` (type=VULNERABILITY)
+   and `/api/hotspots/search` (status=TO_REVIEW) and turns the raw JSON
+   into normalized `Finding` objects. Before returning, the activity
+   stamps every finding's `branch` field by shelling out to
+   `git rev-parse --abbrev-ref HEAD` in the worker's own working
    directory (see [Why branch is read from local git](#why-branch-is-read-from-local-git) below).
-5. The second activity, `create_jira_tickets_activity`, loops over every
-   issue. For each one it calls `find_existing_ticket`, which searches
-   Jira via JQL for a ticket labeled `sonar-key-{issue.key}`. If found,
-   the issue is recorded as skipped. If not, `create_ticket` POSTs a new
-   Jira issue (type `Bug`, priority mapped from SonarQube severity,
-   labeled `sonarqube`, `security`, and `sonar-key-{issue.key}`) and, if
-   the project has an active sprint, moves it there.
+5. The second activity, `create_tickets_activity`, loops over every
+   finding. For each one it calls `find_existing`, which searches Jira
+   via JQL for a ticket labeled `source-key-{finding.key}`. If found, the
+   finding is recorded as skipped. If not, `create_ticket` POSTs a new
+   Jira issue (type `Bug`, priority mapped from the normalized severity,
+   labeled `sonarqube`, `security`, and `source-key-{finding.key}`) and,
+   if the project has an active sprint, moves it there.
 6. If any tickets were created, the workflow fans out
    `capture_and_attach_screenshot_activity` once per created ticket,
    concurrently, via `asyncio.gather(..., return_exceptions=True)`. Each
    invocation:
-   - Opens the issue's SonarQube deep link in a headless, authenticated
-     Chromium session (`sonar/screenshot.py`).
+   - Opens the finding's SonarQube deep link in a headless, authenticated
+     Chromium session (`scanner/screenshot.py`).
    - Screenshots the matched source-viewer element to a temp PNG.
    - Extracts the flagged code's text and SonarQube's inline annotation
-     text from the same page load (no second browser trip).
+     text from the same page load (no second browser trip), returning
+     both plus the screenshot path as a `FindingExtraction`.
    - Attaches the PNG to the Jira ticket (`attach_screenshot`, skipping
      if a same-named file is already there).
    - If any text was extracted, posts it as a Jira comment
@@ -106,7 +109,7 @@ screenshot is not worth retrying aggressively.
    failing screenshot (after its own 2 retry attempts) shows up as an
    exception object in the results list rather than raising — the
    workflow logs a warning per failure and still returns the
-   `JiraTicketResult` from step 5 successfully. **The screenshot/comment
+   `TicketResult` from step 5 successfully. **The screenshot/comment
    step can never turn a successful ticket-creation run into a failed
    workflow.**
 
@@ -131,24 +134,25 @@ screenshot is not worth retrying aggressively.
 
 - **`data_converter.py`** — one constant (`TASK_QUEUE`) and one object
   (`pydantic_data_converter`) shared by the worker, the workflow starter,
-  and (implicitly) every activity. Because of this converter, every
-  Pydantic model in this codebase (`SonarIssue`, `JiraTicketResult`,
-  `ScreenshotAttachInput`, ...) serializes across the
-  workflow/activity boundary automatically — no manual
-  `.model_dump()`/`.model_validate()` anywhere.
+  and (implicitly) every activity. Every model in this codebase is a
+  Pydantic `BaseModel` (`Finding`, `TicketResult`, `ScreenshotAttachInput`,
+  `FindingExtraction`, ...), so this converter serializes every one of
+  them across the workflow/activity boundary automatically — no manual
+  `.model_dump()`/`.model_validate()`, and no dataclass-to-dict
+  workarounds, anywhere.
 - **`worker.py`** — connects to Temporal, registers the one workflow and
   three activities as plain imported function objects (not by string
   name), and blocks on `worker.run()`. Any new activity must be imported
   and added to the `activities=[...]` list here or it silently can't be
   scheduled (the workflow would hang waiting for a worker that never
   claims the task).
-- **`workflows/sonar_to_jira.py`** — the only orchestration logic in the
+- **`workflows/scan_to_ticket.py`** — the only orchestration logic in the
   system. Notice what it does *not* do: no try/except around
   `execute_activity` calls for the first two activities. Temporal's own
   retry policy (default, since none is passed) handles transient
-  failures there, and if `fetch_vulnerabilities_activity` or
-  `create_jira_tickets_activity` fails permanently, the whole workflow
-  is meant to fail loudly — there's no reason to hide a broken
+  failures there, and if `fetch_findings_activity` or
+  `create_tickets_activity` fails permanently, the whole workflow is
+  meant to fail loudly — there's no reason to hide a broken
   SonarQube/Jira connection. The screenshot activity is the only one
   wrapped in failure-tolerant handling, via `return_exceptions=True`.
 - **`models/`** — one file per activity-boundary model
@@ -159,38 +163,47 @@ screenshot is not worth retrying aggressively.
   single `@activity.defn async def` function with no shared state
   between them beyond what's passed as arguments.
 
-### `sonar/` — the SonarQube integration and the Sonar/Cloud seam
+### `core/models.py` and the scanner/ticket seam
 
-- **`interface.py`** — an `ABC` with two methods
-  (`fetch_vulnerabilities`, `fetch_hotspots`). This is the seam between
-  "some Sonar product" and everything downstream; nothing outside
-  `sonar/` should ever import `SonarQubeServerClient` directly.
-- **`factory.py`** — the single place that reads `SONAR_MODE` and picks
-  a concrete class. Comment in the code calls this out explicitly: *"the
-  ONLY place in the codebase that should know which concrete class is in
-  use."*
-- **`server_client.py`** — the real implementation, talking to
-  self-hosted SonarQube. Auth is HTTP Basic with the token as username
-  and an empty password (`(token, "")`), which is SonarQube's documented
-  convention for using a personal access token in place of a
-  username/password pair on its REST API.
-- **`cloud_client.py`** — a deliberate stub. Both methods raise
-  `NotImplementedError`; the comment says implementing SonarQube Cloud
-  support later should mean "flip `SONAR_MODE=cloud` and implement these
-  two methods, nothing else in the codebase needs to change." Nothing
-  currently exercises this path.
-- **`models.py`** — `SonarIssue`, the one model that flows through
-  almost the entire system. See [Data model reference](#data-model-reference)
+Unlike the pre-refactor version of this codebase (a direct SonarQube ->
+Jira pipeline), the current system is generic over which scanner and
+which ticketing system sit behind it:
+
+- **`core/models.py`** — `Finding` and `Severity` are the normalized
+  vocabulary every adapter translates into/out of. Neither
+  `scanner/client.py` nor `ticket/client.py` ever sees the other's
+  tool-specific values (SonarQube's `BLOCKER`/`MAJOR`, Jira's issue
+  keys) outside its own adapter. See [Data model reference](#data-model-reference)
   for every field.
-- **`screenshot.py`** — see the deep dive below; this file has the most
-  interesting failure history in the codebase.
+- **`scanner/client.py`** — `ScannerClient` is an `ABC` with one method,
+  `fetch_findings(project_key) -> list[Finding]` (combining vulnerabilities
+  and hotspots into one list is an internal detail of each adapter, not
+  part of the generic contract). `get_scanner_client()` is the single
+  place that reads `SCANNER_TYPE` and picks a concrete class — the
+  comment in the code calls this out explicitly: *"the ONLY place in the
+  codebase that should know which concrete class is in use."*
+  - `SonarQubeServerClient` — the real implementation, talking to
+    self-hosted SonarQube. Auth is HTTP Basic with the token as username
+    and an empty password (`(token, "")`), which is SonarQube's
+    documented convention for using a personal access token in place of
+    a username/password pair on its REST API.
+  - `SonarQubeCloudClient` — a deliberate stub. `fetch_findings` raises
+    `NotImplementedError`; switching to it later should mean "flip
+    `SCANNER_TYPE=sonarqube-cloud` and implement this one method,
+    nothing else in the codebase needs to change." Nothing currently
+    exercises this path.
+- **`scanner/screenshot.py`** — see the deep dive below; this file has
+  the most interesting failure history in the codebase. Not part of the
+  `ScannerClient` contract — it's a SonarQube-specific bonus capability
+  (Sonar's deep-link URL shape, `SONAR_TOKEN` auth), called directly by
+  the screenshot activity rather than through `get_scanner_client()`.
 
 #### The screenshot/extraction story
 
-`capture_issue_screenshot(issue, out_path) -> FindingExtraction` is the
-one function this module exports. Getting it right took three separate
-bugs found through live testing, each worth understanding because the
-fixes are non-obvious:
+`capture_finding_screenshot(finding, out_path) -> FindingExtraction` is
+the one function this module exports. Getting it right took three
+separate bugs found through live testing, each worth understanding
+because the fixes are non-obvious:
 
 **1. Playwright's async API is required, not a style choice.** Temporal
 runs `async def` activities as coroutines directly on the worker's own
@@ -198,12 +211,12 @@ event loop. Playwright's *sync* API detects a running event loop in the
 calling thread and refuses to start. This is the one place in the
 codebase that doesn't follow the "call blocking I/O directly from
 `async def` activities" pattern used everywhere else (`requests` calls
-in `jira/client.py` and `sonar/server_client.py` are synchronous and
-simply block the loop, which is fine for a local POC's request volume;
+in `ticket/client.py` and `scanner/client.py` are synchronous and simply
+block the loop, which is fine for a local POC's request volume;
 Playwright's sync API can't even be *called* from a running loop, so
 this isn't optional).
 
-**2. `http_credentials` silently never authenticates.** The first
+**2. `http_credentials` silently never authenticates.** An earlier
 version of this module used Playwright's `new_context(http_credentials=...)`
 option — the "correct-looking" way to do HTTP Basic auth in a browser
 context. It doesn't work here: `http_credentials` only attaches the
@@ -227,21 +240,22 @@ is a generously tall viewport (`1280x2000`) set once on the shared
 browser context, so the whole snippet renders without needing to scroll
 at all.
 
-With those three fixed, `capture_issue_screenshot` does, in order:
+With those three fixed, `capture_finding_screenshot` does, in order:
 
 1. Get (or lazily create) a single shared `Browser`/`BrowserContext` for
    the life of the worker process — one browser launch total, not one
-   per issue.
+   per finding.
 2. Open a new `Page`, navigate to
-   `issue.deep_link + f"&open={issue.key}"` (SonarQube's deep-link format
-   already contains the project key and issue key; appending `&open=`
-   is what makes the source viewer auto-expand to that specific issue).
+   `finding.deep_link + f"&open={finding.key}"` (SonarQube's deep-link
+   format already contains the project key and issue key; appending
+   `&open=` is what makes the source viewer auto-expand to that specific
+   issue).
 3. Try a short list of CSS selectors in order (`table`,
    `[data-testid="source-viewer"]`, `.source-viewer`) until one becomes
    visible, screenshot that element, then:
    - Call `.inner_text()` on that same matched locator to get
      `code_snippet` — no second page load, same Playwright session.
-   - Call `_extract_annotation_text(page, issue)` to get
+   - Call `_extract_annotation_text(page, finding)` to get
      `annotation_text`. **This one is scoped to the whole `page`, not
      the matched locator** — live DOM inspection found that SonarQube's
      inline annotation callout is *not* a descendant of the source-code
@@ -258,9 +272,9 @@ With those three fixed, `capture_issue_screenshot` does, in order:
    extraction to at that point) rather than hard-failing the whole
    activity.
 5. Any exception during text extraction specifically (not screenshot
-   capture) is caught, logged as a warning, and the corresponding field
-   is left `None` — a broken extraction never prevents the screenshot
-   itself from succeeding and being returned.
+   capture) is caught, logged as a warning via `activity.logger`, and the
+   corresponding field is left `None` — a broken extraction never
+   prevents the screenshot itself from succeeding and being returned.
 
 This selector-guessing approach is inherently coupled to SonarQube's
 current UI markup (React app with CSS-in-JS hashed class names — there's
@@ -276,9 +290,9 @@ branch information through its REST API at all — confirmed directly by
 inspecting `/api/issues/search`'s raw JSON response, which has no
 `branch` field anywhere. Multi-branch analysis is a Developer
 Edition+ feature. Since this project only ever has one local checkout on
-one machine, `fetch_vulnerabilities_activity` reads
+one machine, `fetch_findings_activity` reads
 `git rev-parse --abbrev-ref HEAD` in the worker's own working directory
-and stamps it onto every `SonarIssue` before returning. This is accurate
+and stamps it onto every `Finding` before returning. This is accurate
 for this specific local, single-checkout setup, but it is **not** a
 substitute for real SonarQube branch-aware analysis — it reports
 whichever branch happens to be checked out on the worker machine at
@@ -287,43 +301,49 @@ scanned if they ever diverge (e.g. someone switches branches on the
 worker's machine between a scan finishing and the workflow's activity
 running).
 
-### `jira/` — the Jira Cloud integration
+### `ticket/client.py` — the Jira Cloud integration
 
-- **`client.py`** — a single concrete `JiraClient` class; there's no
-  abstract interface here (unlike `sonar/`), because only one ticket
-  backend exists. Every method follows the same shape: build a
-  `requests` call with `auth=self.auth`, check the response via
-  `_raise_for_status` (a plain `RuntimeError` with the status code and
-  body — no custom exception hierarchy anywhere in this codebase).
-  - `find_existing_ticket` / `create_ticket` — the dedupe mechanism.
-    Dedupe is a Jira **label** (`sonar-key-{issue.key}`), not a custom
-    field, specifically so it works on a brand-new free-tier project
-    with zero admin setup (custom fields need to be added to a project's
+- **`TicketClient`** is an `ABC` with two methods
+  (`find_existing`, `create_ticket`) — the seam between "some ticketing
+  product" and everything upstream; nothing outside `ticket/client.py`
+  should ever construct `JiraClient` directly. `get_ticket_client()` is
+  the single place that reads `TICKET_BACKEND` and picks a concrete
+  class.
+- **`JiraClient`** — the only concrete implementation today. Every
+  method follows the same shape: build a `requests` call with
+  `auth=self.auth`, check the response via `_raise_for_status` (a plain
+  `RuntimeError` with the status code and body — no custom exception
+  hierarchy anywhere in this codebase).
+  - `find_existing` / `create_ticket` — the dedupe mechanism (the
+    `TicketClient` ABC's two required methods). Dedupe is a Jira
+    **label** (`source-key-{finding.key}`), not a custom field,
+    specifically so it works on a brand-new free-tier project with zero
+    admin setup (custom fields need to be added to a project's
     screen/permission scheme before the API can use them; labels are a
     built-in field on every project).
   - `_get_active_sprint_id` / `_add_issue_to_active_sprint` — looks up
     the project's first Agile board and its active sprint (cached
     per-`JiraClient` instance, since it can't change mid-run), and moves
     every newly-created ticket into it. No active sprint just means new
-    tickets land in the backlog — logged as a warning, not an error.
+    tickets land in the backlog — logged as a warning via
+    `activity.logger`, not an error.
   - `_build_description_adf` — builds the ticket description as
-    Atlassian Document Format: the issue's message as a paragraph, then
-    a bullet list of Rule / Component / Line / Type / **Branch** / a
-    link to the SonarQube deep link.
-  - `attach_screenshot` — **idempotent by filename.** Before uploading,
-    it GETs the ticket's existing attachments and skips the upload if a
-    file with the same name (`sonar-{issue.key}.png`) is already
+    Atlassian Document Format: the finding's message as a paragraph,
+    then a bullet list of Component / Line / Type / Severity / Source /
+    **Branch** / a link to the SonarQube deep link.
+  - `attach_screenshot` — **not part of the `TicketClient` ABC** (a
+    Jira-specific bonus capability, dispatched via `getattr()`, see
+    below) and **idempotent by filename.** Before uploading, it GETs the
+    ticket's existing attachments and skips the upload if a file with
+    the same name (`{finding.source_tool}-{finding.key}.png`) is already
     present. This matters because Temporal may retry the calling
     activity — without this check, a retry after a transient network
     blip could attach the same screenshot twice.
-  - `add_comment` — takes a plain string and wraps the *entire* thing in
-    a single ADF `codeBlock` node (no parsing of the string into
-    separate paragraph/code sections — the caller is responsible for
-    assembling whatever text it wants shown, in whatever order).
-- **`models.py`** — `CreatedTicket` (pairs a Sonar issue key with the
-  Jira key created for it) and `JiraTicketResult` (`created` +
-  `skipped` lists) — the return type of `create_jira_tickets_activity`
-  and, unchanged, of the whole workflow.
+  - `add_comment` — also not part of the `TicketClient` ABC. Takes a
+    plain string and wraps the *entire* thing in a single ADF
+    `codeBlock` node (no parsing of the string into separate
+    paragraph/code sections — the caller is responsible for assembling
+    whatever text it wants shown, in whatever order).
 
 ### The "bonus method" pattern in `capture_and_attach_screenshot_activity`
 
@@ -331,11 +351,11 @@ Both `attach_screenshot` and `add_comment` are invoked through
 `getattr(client, "method_name", None)` rather than called directly:
 
 ```python
-attach_screenshot_fn = getattr(client, "attach_screenshot", None)
-if attach_screenshot_fn is not None:
-    attach_screenshot_fn(input.jira_issue_key, extraction.screenshot_path)
+attach_screenshot = getattr(client, "attach_screenshot", None)
+if attach_screenshot is not None:
+    attach_screenshot(input.ticket_key, extraction.screenshot_path)
 else:
-    logger.warning(...)
+    activity.logger.warning(...)
 ```
 
 This treats both methods as *optional capabilities* a configured ticket
@@ -351,40 +371,47 @@ inside the activity would silently defeat that retry policy; the only
 thing the workflow tolerates as truly non-fatal is a screenshot activity
 that has exhausted its own retries (handled by `asyncio.gather(...,
 return_exceptions=True)` in the workflow, not by anything inside the
-activity itself).
+activity itself). The two capabilities are also checked independently of
+each other, so a hypothetical future `TicketClient` that supports
+`add_comment` but not `attach_screenshot` (or vice versa) still gets
+whichever half it supports.
 
 ## Data model reference
 
+Every model in this codebase is a Pydantic `BaseModel` — there are no
+`dataclasses.dataclass`es anywhere (see `CLAUDE.md`).
+
 | Model | File | Fields | Crosses a Temporal boundary? |
 |---|---|---|---|
-| `SonarIssue` | `sonar/models.py` | `key`, `rule`, `severity`, `component`, `line`, `message`, `type`, `deep_link`, `branch` | Yes — activity input/output |
-| `CreatedTicket` | `jira/models.py` | `sonar_key`, `jira_key` | Yes — nested in `JiraTicketResult` |
-| `JiraTicketResult` | `jira/models.py` | `created: list[CreatedTicket]`, `skipped: list[str]` | Yes — `create_jira_tickets_activity`'s return type and the workflow's return type |
+| `Finding` | `core/models.py` | `key`, `title`, `severity`, `component`, `line`, `message`, `finding_type`, `deep_link`, `source_tool`, `branch` | Yes — activity input/output |
+| `CreatedTicket` | `core/models.py` | `finding_key`, `ticket_key` | Yes — nested in `TicketResult` |
+| `TicketResult` | `core/models.py` | `created: list[CreatedTicket]`, `skipped: list[str]` | Yes — `create_tickets_activity`'s return type and the workflow's return type |
 | `SonarToJiraInput` | `temporal/models/sonar_to_jira.py` | `project_key`, `task_id` | Yes — the workflow's input |
-| `ScreenshotAttachInput` | `temporal/models/screenshot_attach.py` | `sonar_issue: SonarIssue`, `jira_issue_key` | Yes — `capture_and_attach_screenshot_activity`'s input |
-| `FindingExtraction` | `sonar/screenshot.py` | `screenshot_path`, `code_snippet`, `annotation_text` | **No** — a plain `dataclass`, produced and consumed entirely inside `capture_and_attach_screenshot_activity`'s function body; never serialized by Temporal |
+| `ScreenshotAttachInput` | `temporal/models/screenshot_attach.py` | `finding: Finding`, `ticket_key` | Yes — `capture_and_attach_screenshot_activity`'s input |
+| `FindingExtraction` | `scanner/screenshot.py` | `screenshot_path`, `code_snippet`, `annotation_text` | No — produced and consumed entirely inside `capture_and_attach_screenshot_activity`'s function body; never serialized by Temporal. Still a Pydantic `BaseModel`, for consistency with the rest of the codebase, not because Temporal requires it here. |
 
 ## Testing
 
 The `tests/` tree mirrors the source layout
-(`tests/sonar/test_screenshot.py`, `tests/temporal/activities/test_capture_and_attach_screenshot.py`)
+(`tests/scanner/test_screenshot.py`, `tests/temporal/activities/test_capture_and_attach_screenshot.py`)
 and needs no live SonarQube, Jira, or browser — everything is mocked
 with stdlib `unittest.mock`:
 
-- **`tests/sonar/test_screenshot.py`** fakes Playwright's `page`/
+- **`tests/scanner/test_screenshot.py`** fakes Playwright's `page`/
   `locator` objects to verify: `inner_text()` lands in `code_snippet`;
   a text-extraction failure still returns a usable `FindingExtraction`
   (never raises); the page-level `<header>` lookup correctly finds
   `annotation_text` when headers exist and returns `None` when they
   don't or when the lookup itself raises.
 - **`tests/temporal/activities/test_capture_and_attach_screenshot.py`**
-  fakes the Jira client to verify: `add_comment` is called with a body
-  containing both extracted fields when extraction succeeds; both bonus
-  methods are skipped cleanly (with a logged warning, no exception) when
-  a client double doesn't have them; a **real** error from a method that
-  *does* exist still propagates out of the activity (pinning down the
-  "getattr-is-None only" soft-fail boundary described above); the temp
-  directory is removed even when an exception propagates.
+  fakes the ticket client (via `get_ticket_client`) to verify:
+  `add_comment` is called with a body containing both extracted fields
+  when extraction succeeds; both bonus methods are skipped cleanly (with
+  a logged warning, no exception) when a client double doesn't have
+  them; a **real** error from a method that *does* exist still
+  propagates out of the activity (pinning down the "getattr-is-None
+  only" soft-fail boundary described above); the temp directory is
+  removed even when an exception propagates.
 
 Run everything with:
 
@@ -406,20 +433,21 @@ before running the worker or receiver (see `README.md` for the exact
 | Variable | Read by | Purpose |
 |---|---|---|
 | `SONAR_WEBHOOK_SECRET` | `receiver/app.py` | HMAC key for verifying incoming webhooks |
-| `SONAR_MODE` | `sonar/factory.py` | `local` or `cloud` — picks the `SonarClient` implementation |
-| `SONAR_HOST_URL` | `sonar/factory.py`, `sonar/screenshot.py` (via `issue.deep_link`) | Base URL of the SonarQube instance |
-| `SONAR_TOKEN` | `sonar/factory.py`, `sonar/screenshot.py` | User token; used both as the REST API's Basic-auth username and as the Playwright browser session's Basic-auth token |
-| `SONAR_ORGANIZATION` | `sonar/factory.py` | Only used when `SONAR_MODE=cloud` (currently unimplemented) |
-| `JIRA_URL` | `jira/client.py` (via activities) | Base URL of the Jira Cloud site |
-| `JIRA_EMAIL` | `jira/client.py` (via activities) | Account the API token belongs to |
-| `JIRA_API_TOKEN` | `jira/client.py` (via activities) | Jira Cloud API token |
-| `JIRA_PROJECT_KEY` | `jira/client.py` (via activities) | Which Jira project tickets are created in |
+| `SCANNER_TYPE` | `scanner/client.py` | `sonarqube` or `sonarqube-cloud` — picks the `ScannerClient` implementation (falls back to the legacy `SONAR_MODE` var if unset) |
+| `SONAR_HOST_URL` | `scanner/client.py`, `scanner/screenshot.py` (via `finding.deep_link`) | Base URL of the SonarQube instance |
+| `SONAR_TOKEN` | `scanner/client.py`, `scanner/screenshot.py` | User token; used both as the REST API's Basic-auth username and as the Playwright browser session's Basic-auth token |
+| `SONAR_ORGANIZATION` | `scanner/client.py` | Only used when `SCANNER_TYPE=sonarqube-cloud` (currently unimplemented) |
+| `TICKET_BACKEND` | `ticket/client.py` | `jira` — picks the `TicketClient` implementation |
+| `JIRA_URL` | `ticket/client.py` (via activities) | Base URL of the Jira Cloud site |
+| `JIRA_EMAIL` | `ticket/client.py` (via activities) | Account the API token belongs to |
+| `JIRA_API_TOKEN` | `ticket/client.py` (via activities) | Jira Cloud API token |
+| `JIRA_PROJECT_KEY` | `ticket/client.py` (via activities) | Which Jira project tickets are created in |
 
 ## Known limitations
 
 - **`SonarQubeCloudClient` is an unimplemented stub.** Setting
-  `SONAR_MODE=cloud` will raise `NotImplementedError` the moment either
-  method is called.
+  `SCANNER_TYPE=sonarqube-cloud` will raise `NotImplementedError` the
+  moment `fetch_findings` is called.
 - **No ticket lifecycle beyond creation.** If a SonarQube issue is later
   resolved, nothing updates or closes the corresponding Jira ticket —
   dedupe only ever prevents *re-creating* a ticket, it never reconciles

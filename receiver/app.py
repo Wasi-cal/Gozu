@@ -13,12 +13,16 @@ import uuid
 
 from flask import Flask, jsonify, request
 
+from receiver.starter import start_scan_to_ticket_workflow
 from receiver.verify_signature import verify_signature
-from receiver.starter import start_sonar_to_jira_workflow
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# No CSRF protection needed: this app has no cookies/sessions/HTML forms for
+# an attacker's page to ride on. The only route is a webhook authenticated by
+# HMAC signature (verify_signature.py), which a forged cross-site request
+# can't produce without SONAR_WEBHOOK_SECRET.
 app = Flask(__name__)
 
 
@@ -44,7 +48,7 @@ def sonarqube_webhook():
     logger.info(f"Verified webhook for project_key={project_key} task_id={task_id}")
 
     try:
-        workflow_id = asyncio.run(start_sonar_to_jira_workflow(project_key, task_id))
+        workflow_id = asyncio.run(start_scan_to_ticket_workflow(project_key, task_id))
     except Exception:
         logger.exception("Failed to start Temporal workflow")
         return jsonify({"error": "failed to start workflow"}), 500
