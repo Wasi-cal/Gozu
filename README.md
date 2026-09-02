@@ -269,8 +269,10 @@ and still work independently of this stack.
    Confirm both tables exist and are empty:
 
    ```bash
-   docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-     -c "SELECT count(*) FROM configs;" -c "SELECT count(*) FROM config_credentials;"
+   docker compose exec postgres sh -c '
+     psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+       -c "SELECT count(*) FROM configs;" -c "SELECT count(*) FROM config_credentials;"
+   '
    # count
    # -------
    #     0
@@ -410,9 +412,11 @@ Query the tables directly (same spirit as Phase 1's
 `scripts/seed_test_config.py`, now exercised through the real wizard):
 
 ```bash
-docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-  -c "SELECT name, scanner_type, scanner_mode, trigger_mode FROM configs;" \
-  -c "SELECT config_id, key, left(value, 12) || '...' AS ciphertext_preview FROM config_credentials;"
+docker compose exec postgres sh -c '
+  psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+    -c "SELECT name, scanner_type, scanner_mode, trigger_mode FROM configs;" \
+    -c "SELECT config_id, key, left(value, 12) || '"'"'...'"'"' AS ciphertext_preview FROM config_credentials;"
+'
 ```
 
 The `configs` row should match what you chose in the wizard; every
