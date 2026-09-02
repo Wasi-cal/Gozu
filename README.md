@@ -10,10 +10,17 @@ SonarQube -> a second activity creates a Jira ticket for each issue that
 doesn't already have one (dedupe via a label), skipping the rest, and
 drops new tickets straight into the project's active sprint if one exists
 -> a third activity screenshots each newly-created ticket's flagged code
-in the SonarQube UI and attaches it to the ticket. The screenshot activity
-runs concurrently per ticket, with its own (more lenient) timeout and
-retry policy, and its failures are isolated per-ticket - a broken
-screenshot never fails the workflow run or affects ticket creation/dedupe.
+in the SonarQube UI, attaches it to the ticket, and (best-effort, in the
+same Playwright session) extracts the flagged code and SonarQube's inline
+issue annotation as text, posting them as a ticket comment. The screenshot
+activity runs concurrently per ticket, with its own (more lenient) timeout
+and retry policy, and its failures are isolated per-ticket - a broken
+screenshot never fails the workflow run or affects ticket creation/dedupe,
+and a failed text extraction degrades to no comment rather than failing
+the screenshot/attach step. Findings are also stamped with the git branch
+checked out in the worker's own working directory (SonarQube Community
+Build doesn't report branch info via its API) and it's surfaced in the
+ticket description.
 
 ## Architecture
 
@@ -59,11 +66,14 @@ temporal/worker.py -> temporal/workflows/scan_to_ticket.py (ScanToTicketWorkflow
                   |
                   v
              scanner/screenshot.py (Playwright, async API) -> screenshot of
-             the finding's source viewer panel
+             the finding's source viewer panel, plus best-effort extraction
+             of the flagged code + inline issue annotation as text
                   |
                   v
              ticket/client.py (JiraClient.attach_screenshot) -> attaches
-             sonarqube-{finding-key}.png to the ticket
+             sonarqube-{finding-key}.png to the ticket, then
+             (JiraClient.add_comment) -> posts the extracted text as a
+             comment, if any was extracted
 ```
 
 The pipeline is generic over which scanner and which ticketing system are
@@ -93,28 +103,39 @@ Nothing in the `temporal/` package or `receiver/` needs to change to add a
 new scanner or ticket backend - they only ever talk to `ScannerClient` /
 `TicketClient` / `Finding`.
 
-Screenshot capture/attach (`scanner/screenshot.py`,
-`ticket/client.py`'s `attach_screenshot`) is a bonus capability layered on
-top, not part of either abstract interface - it's called directly from
-`capture_and_attach_screenshot_activity` rather than through
-`get_scanner_client()`/`get_ticket_client()`, since it's specific to
-SonarQube's UI and Jira's attachment API and isn't guaranteed to exist on
-every future scanner/ticket backend.
+Screenshot capture/attach and text extraction/comment (`scanner/screenshot.py`,
+`ticket/client.py`'s `attach_screenshot` and `add_comment`) are bonus
+capabilities layered on top, not part of either abstract interface - they're
+called directly from `capture_and_attach_screenshot_activity` rather than
+through `get_scanner_client()`/`get_ticket_client()`, since they're specific
+to SonarQube's UI and Jira's attachment/comment APIs and aren't guaranteed
+to exist on every future scanner/ticket backend. `capture_finding_screenshot`
+returns a `FindingExtraction` (screenshot path + best-effort code
+snippet/annotation text); `attach_screenshot` and `add_comment` are each
+dispatched independently via `getattr()`, so a future `TicketClient` missing
+either one just skips that step instead of crashing.
 
 Switching from self-hosted SonarQube to SonarQube Cloud later should mean:
 
 1. Implementing `fetch_findings()` on `scanner/client.py`'s `SonarQubeCloudClient`.
 2. Setting `SCANNER_TYPE=sonarqube-cloud` in `.env`.
 
-**Serialization note:** `Finding` and `Severity` are a plain dataclass/Enum,
-not Pydantic models, so they don't cross the Temporal workflow/activity
-boundary automatically the way `TicketResult`/`CreatedTicket`/
-`SonarToJiraInput` (all Pydantic `BaseModel`s, handled by the Pydantic-aware
-data converter in `temporal/data_converter.py`) do.
-`fetch_findings_activity` converts each `Finding` to a `dict` with
-`dataclasses.asdict()` (plus `severity.value` for the enum) before
-returning it, and `create_tickets_activity` reconstructs `Finding` objects
-from those dicts on the way in.
+**Serialization note:** every type that crosses a Temporal workflow/activity
+boundary (`Finding`, `CreatedTicket`, `TicketResult`, `SonarToJiraInput`,
+`ScreenshotAttachInput`) is a Pydantic `BaseModel`, handled automatically by
+the Pydantic-aware data converter in `temporal/data_converter.py` - no
+manual dict conversion needed anywhere in the pipeline. `Severity` is an
+`Enum` field on `Finding`, which Pydantic serializes natively.
+
+**Logging note:** this project uses exactly one logging mechanism inside the
+Temporal-executed pipeline - `workflow.logger` in `scan_to_ticket.py`,
+`activity.logger` everywhere else that runs inside an activity (`scanner/`,
+`ticket/`, `temporal/activities/`). Both are Temporal's contextual loggers,
+so every log line is automatically tagged with workflow/activity id, run id,
+etc. Plain `logging.basicConfig`/`logging.getLogger` is used only in the two
+process entrypoints (`receiver/app.py`, `temporal/worker.py`), since there's
+no Temporal activity/workflow context to attach to before a workflow starts
+or before the worker begins running.
 
 ## Prerequisites
 
@@ -418,6 +439,20 @@ skip," introduce a new flagged issue somewhere in the codebase, re-scan,
 and confirm exactly one new ticket is created for it while the existing
 issues are still reported as skipped.
 
+## Running the unit tests
+
+The `tests/` suite is fully mocked (no SonarQube/Jira/Temporal server
+needed) - it covers `capture_finding_screenshot`'s text extraction and
+`capture_and_attach_screenshot_activity`'s dispatch/isolation logic:
+
+```bash
+pip install -r requirements.txt  # includes pytest + pytest-asyncio
+pytest
+```
+
+`pytest.ini` sets `asyncio_mode = auto` so `async def test_...` functions
+run without per-test `@pytest.mark.asyncio` decorators.
+
 ## Testing the receiver without a real SonarQube webhook
 
 You can hand-craft a signed request to test the receiver in isolation:
@@ -457,9 +492,11 @@ temporal/
   worker.py                    Temporal worker entrypoint (task queue: sonar-jira-queue)
   data_converter.py            TASK_QUEUE constant + the Pydantic-aware data converter
   activities/
-    fetch_findings.py          fetch_findings_activity (calls the ScannerClient interface)
+    fetch_findings.py          fetch_findings_activity (calls the ScannerClient interface,
+                                stamps each Finding.branch from the worker's local git state)
     create_tickets.py          create_tickets_activity (dedupe + create via the TicketClient interface)
-    capture_and_attach_screenshot.py  capture_and_attach_screenshot_activity (screenshot + attach, bonus capability)
+    capture_and_attach_screenshot.py  capture_and_attach_screenshot_activity (screenshot + attach +
+                                extracted-text comment, bonus capability)
   workflows/
     scan_to_ticket.py          ScanToTicketWorkflow
   models/
@@ -467,20 +504,28 @@ temporal/
     screenshot_attach.py       ScreenshotAttachInput (the screenshot activity's input model)
 
 core/
-  models.py                    Finding, Severity (normalized vocabulary), CreatedTicket, TicketResult
+  models.py                    Finding (incl. branch), Severity (normalized vocabulary),
+                                CreatedTicket, TicketResult
 
 scanner/
   client.py                    ScannerClient (ABC) - the scanner extension point.
                                 SonarQubeServerClient (real) + SonarQubeCloudClient (stub) +
                                 get_scanner_client() (picks one based on SCANNER_TYPE)
-  screenshot.py                 capture_finding_screenshot (Playwright, async API) - bonus capability
+  screenshot.py                 capture_finding_screenshot (Playwright, async API) - bonus capability,
+                                returns a FindingExtraction (screenshot path + best-effort
+                                code snippet/annotation text)
 
 ticket/
   client.py                    TicketClient (ABC) - the ticket extension point.
-                                JiraClient (+ its attach_screenshot bonus method) +
+                                JiraClient (+ its attach_screenshot and add_comment bonus methods) +
                                 get_ticket_client() (picks one based on TICKET_BACKEND)
 
+tests/
+  scanner/test_screenshot.py                            capture_finding_screenshot extraction tests
+  temporal/activities/test_capture_and_attach_screenshot.py  activity dispatch/isolation tests
+
 requirements.txt
+pytest.ini                     asyncio_mode = auto, for the async activity/screenshot tests
 .env.example
 sonar-project.properties       Scan config for this repo (project key: sonar-to-jira)
 ```

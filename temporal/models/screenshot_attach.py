@@ -2,7 +2,9 @@
 
 from pydantic import BaseModel
 
+from core.models import Finding
+
 
 class ScreenshotAttachInput(BaseModel):
-    finding: dict  # the same dict shape fetch_findings_activity returns (Finding, asdict'd)
+    finding: Finding
     ticket_key: str

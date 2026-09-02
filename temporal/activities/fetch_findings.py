@@ -1,6 +1,6 @@
 """Activity: fetch findings for a project via the ScannerClient interface."""
 
-import dataclasses
+import subprocess
 
 from temporalio import activity
 
@@ -8,20 +8,33 @@ from core.models import Finding
 from scanner.client import get_scanner_client
 
 
-@activity.defn
-async def fetch_findings_activity(project_key: str) -> list[dict]:
+def _get_git_branch() -> str | None:
     """
-    Returns findings as plain dicts (not Finding objects) because Finding is
-    a dataclass with an Enum field, and Temporal's data converter doesn't
-    serialize either of those on its own - create_tickets_activity
-    reconstructs Finding objects from these dicts.
+    SonarQube Community Build doesn't report per-issue branch info via its
+    API (that's a Developer Edition+ feature), so this reads the branch
+    that's actually checked out in this worker's own working directory -
+    accurate for this project's local, single-checkout setup, but not a
+    substitute for real branch-aware analysis.
     """
-    client = get_scanner_client()
-    findings: list[Finding] = client.fetch_findings(project_key)
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip() or None
+    except Exception:  # noqa: BLE001 - branch is best-effort metadata, never worth failing the fetch over
+        return None
 
-    results = []
+
+@activity.defn
+async def fetch_findings_activity(project_key: str) -> list[Finding]:
+    client = get_scanner_client()
+    findings = client.fetch_findings(project_key)
+
+    branch = _get_git_branch()
     for finding in findings:
-        data = dataclasses.asdict(finding)
-        data["severity"] = finding.severity.value
-        results.append(data)
-    return results
+        finding.branch = branch
+
+    return findings

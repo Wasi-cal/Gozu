@@ -7,15 +7,13 @@ nothing in core/models.py, ticket/client.py, or the Temporal
 workflow/activities/receiver needs to change.
 """
 
-import logging
 import os
 from abc import ABC, abstractmethod
 
 import requests
+from temporalio import activity
 
 from core.models import Finding, Severity
-
-logger = logging.getLogger(__name__)
 
 # SonarQube's severity scale -> our normalized Severity. Anything not in
 # here (including hotspots, which report a "vulnerability probability" of
@@ -82,7 +80,7 @@ class SonarQubeServerClient(ScannerClient):
     def _map_severity(self, raw_severity: str | None) -> Severity:
         if raw_severity in SONAR_SEVERITY_MAP:
             return SONAR_SEVERITY_MAP[raw_severity]
-        logger.warning(
+        activity.logger.warning(
             f"Unrecognized or missing severity '{raw_severity}', defaulting to '{DEFAULT_SEVERITY.value}'"
         )
         return DEFAULT_SEVERITY

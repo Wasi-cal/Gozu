@@ -7,16 +7,14 @@ get_ticket_client() - nothing in core/models.py, scanner/client.py, or the
 Temporal workflow/activities/receiver needs to change.
 """
 
-import logging
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 import requests
+from temporalio import activity
 
 from core.models import Finding, Severity
-
-logger = logging.getLogger(__name__)
 
 # Normalized Severity -> Jira priority name.
 SEVERITY_TO_PRIORITY = {
@@ -75,7 +73,9 @@ class JiraClient(TicketClient):
         self._raise_for_status(boards_response, "board lookup")
         boards = boards_response.json().get("values", [])
         if not boards:
-            logger.warning(f"No Agile board found for project {self.project_key}; new tickets will stay in the backlog")
+            activity.logger.warning(
+                f"No Agile board found for project {self.project_key}; new tickets will stay in the backlog"
+            )
             return None
 
         board_id = boards[0]["id"]
@@ -87,7 +87,9 @@ class JiraClient(TicketClient):
         self._raise_for_status(sprints_response, "sprint lookup")
         sprints = sprints_response.json().get("values", [])
         if not sprints:
-            logger.warning(f"No active sprint on board {board_id}; new tickets will stay in the backlog")
+            activity.logger.warning(
+                f"No active sprint on board {board_id}; new tickets will stay in the backlog"
+            )
             return None
 
         self._active_sprint_id = sprints[0]["id"]
@@ -196,6 +198,15 @@ class JiraClient(TicketClient):
                             "content": [
                                 {
                                     "type": "paragraph",
+                                    "content": [{"type": "text", "text": f"Branch: {finding.branch or 'unknown'}"}],
+                                }
+                            ],
+                        },
+                        {
+                            "type": "listItem",
+                            "content": [
+                                {
+                                    "type": "paragraph",
                                     "content": [
                                         {
                                             "type": "text",
@@ -257,7 +268,9 @@ class JiraClient(TicketClient):
 
         existing = get_response.json().get("fields", {}).get("attachment", [])
         if any(attachment.get("filename") == image_path.name for attachment in existing):
-            logger.warning(f"Attachment {image_path.name} already exists on {issue_key}; skipping upload")
+            activity.logger.warning(
+                f"Attachment {image_path.name} already exists on {issue_key}; skipping upload"
+            )
             return
 
         with open(image_path, "rb") as f:
@@ -268,6 +281,32 @@ class JiraClient(TicketClient):
                 files={"file": (image_path.name, f, "image/png")},
             )
         self._raise_for_status(response, "attach screenshot")
+
+    def add_comment(self, ticket_key: str, body: str) -> None:
+        """
+        Add a comment to an existing ticket, rendering `body` as a single
+        Jira code-block node.
+
+        Not part of the generic TicketClient contract - it's a Jira-specific
+        bonus capability, called directly by the screenshot activity rather
+        than through get_ticket_client()'s abstract interface.
+        """
+        payload = {
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {"type": "codeBlock", "attrs": {}, "content": [{"type": "text", "text": body}]}
+                ],
+            }
+        }
+        response = requests.post(
+            f"{self.base_url}/rest/api/3/issue/{ticket_key}/comment",
+            json=payload,
+            auth=self.auth,
+            headers=self.headers,
+        )
+        self._raise_for_status(response, "add comment")
 
 
 def get_ticket_client() -> TicketClient:
