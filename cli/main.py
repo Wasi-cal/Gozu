@@ -3,11 +3,23 @@
 import typer
 
 from cli.init_wizard import run_init_wizard
+from scripts.bootstrap_env import load_into_environ
 
 app = typer.Typer(
     name="codescan",
     help="Scan code with SonarQube and auto-create Jira tickets for vulnerabilities.",
 )
+
+
+@app.callback()
+def _load_env() -> None:
+    """
+    Load .env (if it exists yet) into this process's environment before any
+    command runs - config_store and friends read POSTGRES_HOST etc from
+    os.environ, which a `source .env` in the shell normally provides, but
+    codescan can't assume the caller did that.
+    """
+    load_into_environ()
 
 
 @app.command()

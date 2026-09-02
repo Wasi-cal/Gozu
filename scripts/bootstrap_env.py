@@ -23,6 +23,7 @@ rather than just running this script as a subprocess.
 """
 
 import argparse
+import os
 import secrets
 import socket
 import sys
@@ -79,6 +80,18 @@ def parse_env_file(path: Path) -> dict[str, str]:
         key, _, value = line.partition("=")
         values[key.strip()] = value.strip().strip('"').strip("'")
     return values
+
+
+def load_into_environ(path: Path = ENV_PATH) -> None:
+    """
+    Load .env's values into this process's environment - writing .env to
+    disk (bootstrap_env()) doesn't, by itself, make POSTGRES_HOST etc
+    visible to os.environ for the process that just wrote it. Never
+    overwrites a value already set in the environment (a real exported
+    env var, or an earlier call in the same process, wins over .env).
+    """
+    for key, value in parse_env_file(path).items():
+        os.environ.setdefault(key, value)
 
 
 def _fernet_key_safety_check(resolved: dict[str, str], force_new_key: bool) -> None:

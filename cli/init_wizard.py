@@ -19,7 +19,12 @@ import config_store
 from cli.help_links import print_help_link
 from cli.prerequisites import ensure_java
 from scanner.client import SCANNER_REGISTRY
-from scripts.bootstrap_env import FernetKeySafetyError, bootstrap_env, resolve_ports
+from scripts.bootstrap_env import (
+    FernetKeySafetyError,
+    bootstrap_env,
+    load_into_environ,
+    resolve_ports,
+)
 
 
 def _ask_or_exit(question: questionary.Question) -> str:
@@ -56,6 +61,11 @@ def _step_bootstrap_env() -> None:
         typer.echo("Wrote new .env field(s): " + ", ".join(new_fields))
     else:
         typer.echo(".env already had everything needed - left untouched.")
+
+    # Picks up whatever bootstrap_env() just wrote (a first-ever run has
+    # nothing in os.environ yet - the app-level callback only loaded
+    # .env's *previous* contents, before this function possibly added more).
+    load_into_environ()
 
 
 def _step_ensure_java() -> None:
