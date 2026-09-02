@@ -3,5 +3,7 @@ requests
 temporalio
 pydantic
 playwright
+cryptography
+psycopg[binary]
 pytest
 pytest-asyncio

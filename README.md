@@ -137,6 +137,140 @@ process entrypoints (`receiver/app.py`, `temporal/worker.py`), since there's
 no Temporal activity/workflow context to attach to before a workflow starts
 or before the worker begins running.
 
+## Phase 1: Infrastructure
+
+This project is being rebuilt into a commercial CLI tool (name TBD; the
+working directory/repo stays `sonar-to-jira` for now). This is Phase 1 of
+that build: **infrastructure only** - a Docker Compose stack that boots
+cleanly with an empty, seeded Postgres database, plus a verified encrypted
+credential store. There is no CLI wizard yet (that's Phase 2) - the
+sections below (steps 1-10) describe the older, fully-manual local
+workflow and still work independently of this stack.
+
+**What got added:**
+
+- **`crypto_utils.py`** - `encrypt_token()`/`decrypt_token()` using Fernet
+  (from the `cryptography` library), keyed by a `FERNET_KEY` environment
+  variable. Raises a clear error (not a silent no-op) if `FERNET_KEY` is
+  missing or malformed.
+- **`sql/init.sql`** - the `configs` table: one named set of scanner +
+  ticket-backend credentials. Called "configs", not "profiles" - Docker
+  Compose already has an unrelated concept called profiles (for
+  conditionally starting services; see the `sonarqube` service below), and
+  reusing that word here would be confusing throughout the codebase and
+  docs. Secrets (`sonar_token`, `jira_api_token`, `webhook_secret`) are
+  stored as Fernet ciphertext, never plaintext. Mounted into the postgres
+  container's `/docker-entrypoint-initdb.d/`, so it runs automatically
+  the first time the `postgres_data` volume is initialized.
+- **`config_store.py`** - psycopg3-based CRUD against `configs`:
+  `create_config()`/`get_config()` encrypt/decrypt the three secret fields
+  automatically; `list_configs()` returns only non-secret metadata (for a
+  future picker list, not for use); `get_config()` returns `None` for a
+  miss rather than raising. All parameterized queries, no string-built SQL.
+- **`scanner/client.py`** - `ScannerClient` gained an abstract
+  `requirements() -> ScannerRequirements` method (`docker_services`,
+  `host_dependencies`), so a future CLI wizard can know what to spin up
+  and what to check for on the host, per scanner backend.
+- **`Dockerfile`** - containerizes `temporal/worker.py`. Sets
+  `PYTHONUNBUFFERED=1` (otherwise the worker's log lines never flush
+  inside a container) and `PYTHONPATH=/app` (so activity/scanner/ticket
+  imports and scripts under `scripts/` resolve the same way running with
+  `python -m` from the repo root does on the host).
+- **`docker-compose.yml`**:
+  - `postgres` (`postgres:16-alpine`) and `temporal`
+    (`temporalio/admin-tools`, running `temporal server start-dev` - the
+    same one-box dev server as the CLI, just containerized) are always-on,
+    no profile tag.
+  - `sonarqube` (`sonarqube:community`) is tagged `profiles:
+    ["sonarqube-local"]`, so it only starts when that profile is
+    explicitly requested - most scanner backends (e.g. SonarQube Cloud)
+    won't need a local container at all.
+  - `worker` is built from the `Dockerfile`, always-on, and waits on both
+    `temporal` and `postgres` being `service_healthy` before starting.
+  - All four services read from the same `.env`.
+- **`scripts/bootstrap_env.py`** - generates `.env` once (a random
+  Postgres password + a fresh Fernet key). Idempotent: refuses to
+  overwrite an existing `.env`, since a fresh `FERNET_KEY` would make
+  every already-encrypted value in the database permanently unreadable.
+- **`scripts/seed_test_config.py`** - throwaway verification script (not
+  part of the product): inserts one dummy config, reads it back, and
+  confirms every field round-tripped correctly - proving the
+  encrypt-on-write/decrypt-on-read path works end to end against a real
+  Postgres instance.
+
+### Running it
+
+1. **Generate `.env`** (once per checkout):
+
+   ```bash
+   pip install -r requirements.txt   # if not already done
+   python scripts/bootstrap_env.py
+   ```
+
+   If you already have a `.env` from the manual workflow below (with
+   `SONAR_TOKEN`/`JIRA_*` filled in), back it up first, delete it, re-run
+   the bootstrap script to generate `POSTGRES_*`/`FERNET_KEY`/
+   `TEMPORAL_HOST`, then merge your old `SONAR_*`/`JIRA_*` lines back in -
+   `bootstrap_env.py` intentionally won't touch or merge into an existing
+   file itself.
+
+2. **Bring up the stack:**
+
+   ```bash
+   docker compose up -d
+   ```
+
+   Add `--profile sonarqube-local` if you also want a local SonarQube
+   container:
+
+   ```bash
+   docker compose --profile sonarqube-local up -d
+   ```
+
+3. **Confirm health:**
+
+   ```bash
+   docker compose ps
+   ```
+
+   `postgres` and `temporal` should show `healthy`; `worker` should show
+   `Up` (it has no separate healthcheck - `docker compose logs worker`
+   should show `Worker started, listening on task queue 'sonar-jira-queue'...`
+   with no crash/restart loop). If you started it, `sonarqube` takes
+   30-60s+ to go `healthy` (it polls `/api/system/status` for `"UP"`).
+
+   Confirm the `configs` table exists and is empty:
+
+   ```bash
+   docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT count(*) FROM configs;"
+   # count
+   # -------
+   #     0
+   ```
+
+4. **Prove the encryption round-trip:**
+
+   ```bash
+   docker compose exec worker python scripts/seed_test_config.py
+   ```
+
+   Successful output looks like:
+
+   ```
+   Creating config 'phase1-seed-test-XXXXXXXX'...
+   Created config id=1
+   Reading it back and decrypting...
+   Cleaned up config 'phase1-seed-test-XXXXXXXX'
+   SUCCESS: all 12 fields round-tripped correctly (encrypted on write, decrypted on read, values match).
+   ```
+
+   The script cleans up its own row, so `configs` is empty again
+   afterward and it's safe to re-run.
+
+**`.env` must never be committed** - `.gitignore` already includes it (it
+holds the generated Postgres password, the Fernet key, and whatever real
+SonarQube/Jira credentials you fill in).
+
 ## Prerequisites
 
 - Docker (for SonarQube Community Build)

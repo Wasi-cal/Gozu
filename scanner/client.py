@@ -11,6 +11,7 @@ import os
 from abc import ABC, abstractmethod
 
 import requests
+from pydantic import BaseModel
 from temporalio import activity
 
 from core.models import Finding, Severity
@@ -34,6 +35,18 @@ TYPE_LABELS = {
 }
 
 
+class ScannerRequirements(BaseModel):
+    """
+    What has to be true on the host/in Docker Compose for a given
+    ScannerClient to actually work - used by the (Phase 2) CLI wizard to
+    decide which Compose profiles/services to bring up and which host
+    binaries to check for, not by anything in this phase.
+    """
+
+    docker_services: list[str]
+    host_dependencies: list[str]
+
+
 class ScannerClient(ABC):
     @abstractmethod
     def fetch_findings(self, project_key: str) -> list[Finding]:
@@ -43,6 +56,11 @@ class ScannerClient(ABC):
         Combining multiple upstream categories into one list is an internal
         detail of each adapter, not part of the generic contract.
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    def requirements(self) -> ScannerRequirements:
+        """Docker services and host binaries this scanner needs to run."""
         raise NotImplementedError
 
 
@@ -169,6 +187,9 @@ class SonarQubeServerClient(ScannerClient):
     def fetch_findings(self, project_key: str) -> list[Finding]:
         return self._fetch_vulnerabilities(project_key) + self._fetch_hotspots(project_key)
 
+    def requirements(self) -> ScannerRequirements:
+        return ScannerRequirements(docker_services=["sonarqube"], host_dependencies=["java"])
+
 
 class SonarQubeCloudClient(ScannerClient):
     """
@@ -190,6 +211,11 @@ class SonarQubeCloudClient(ScannerClient):
         raise NotImplementedError(
             "SonarQube Cloud support comes later - see get_scanner_client()"
         )
+
+    def requirements(self) -> ScannerRequirements:
+        # No local container - SonarQube Cloud is a hosted SaaS product -
+        # but the sonar-scanner CLI still needs a JVM to run.
+        return ScannerRequirements(docker_services=[], host_dependencies=["java"])
 
 
 def get_scanner_client() -> ScannerClient:

@@ -1,15 +1,35 @@
 # Project conventions
 
+## The product
+
+This repo is being built into a commercial CLI tool (name TBD - the repo/
+working directory stays `sonar-to-jira` until a real name is picked, don't
+rename it preemptively) that lets users scan code with SonarQube and
+auto-create Jira tickets for vulnerabilities, orchestrated with Temporal.
+The build is happening in phases; check with the user before assuming a
+later phase's scope (e.g. the CLI wizard, the init flow) is open to work on.
+
+## Naming: "configs", not "profiles"
+
+A saved, named set of scanner + ticket-backend credentials (see
+`sql/init.sql`'s `configs` table, `config_store.py`) is called a **config**,
+never a "profile". Docker Compose already has an unrelated built-in concept
+called profiles (`docker-compose.yml`'s `profiles: [...]` on the
+`sonarqube` service, for conditionally starting services) - reusing "profile"
+for credential sets would be confusing throughout the codebase and docs
+given both concepts exist side by side in this project.
+
 ## Data models
 
 Use **Pydantic `BaseModel`** for every data model in this project - never
 `dataclasses.dataclass` or plain classes. This includes types that cross a
 Temporal workflow/activity boundary (`Finding`, `CreatedTicket`,
 `TicketResult`, `SonarToJiraInput`, `ScreenshotAttachInput`) and any new
-ones added later. The Pydantic-aware data converter
-(`temporal/data_converter.py`) serializes `BaseModel`s across that boundary
-automatically - a plain dataclass or dict does not, and needs manual
-conversion, which is exactly what we removed by standardizing on Pydantic.
+ones added later (e.g. `ScannerRequirements`, `FindingExtraction`). The
+Pydantic-aware data converter (`temporal/data_converter.py`) serializes
+`BaseModel`s across that boundary automatically - a plain dataclass or
+dict does not, and needs manual conversion, which is exactly what we
+removed by standardizing on Pydantic.
 
 ## Logging
 
