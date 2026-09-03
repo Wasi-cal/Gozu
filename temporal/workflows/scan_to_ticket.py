@@ -15,6 +15,8 @@ with workflow.unsafe.imports_passed_through():
     )
     from temporal.activities.create_tickets import create_tickets_activity
     from temporal.activities.fetch_findings import fetch_findings_activity
+    from temporal.models.create_tickets import CreateTicketsInput
+    from temporal.models.fetch_findings import FetchFindingsInput
     from temporal.models.screenshot_attach import ScreenshotAttachInput
 
 
@@ -28,8 +30,15 @@ class ScanToTicketWorkflow:
 
         findings = await workflow.execute_activity(
             fetch_findings_activity,
-            input.project_key,
+            FetchFindingsInput(
+                project_key=input.project_key,
+                scanner_type=input.scanner_type,
+                scanner_mode=input.scanner_mode,
+                credentials=input.credentials,
+                branch=input.branch,
+            ),
             start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(maximum_attempts=3),
         )
 
         workflow.logger.info(
@@ -43,8 +52,9 @@ class ScanToTicketWorkflow:
 
         ticket_result = await workflow.execute_activity(
             create_tickets_activity,
-            findings,
+            CreateTicketsInput(findings=findings, ticket_backend=input.ticket_backend, credentials=input.credentials),
             start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(maximum_attempts=3),
         )
 
         workflow.logger.info(
@@ -66,6 +76,8 @@ class ScanToTicketWorkflow:
                         ScreenshotAttachInput(
                             finding=findings_by_key[entry.finding_key],
                             ticket_key=entry.ticket_key,
+                            ticket_backend=input.ticket_backend,
+                            credentials=input.credentials,
                         ),
                         start_to_close_timeout=timedelta(seconds=45),
                         retry_policy=RetryPolicy(maximum_attempts=2),

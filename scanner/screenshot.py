@@ -19,13 +19,12 @@ it renders the login page. Forcing the header on every request sidesteps
 that entirely.
 
 Not part of the generic ScannerClient contract - it's a SonarQube-specific
-bonus capability (Sonar's deep-link URL shape, SONAR_TOKEN auth), called
+bonus capability (Sonar's deep-link URL shape, token-based Basic auth), called
 directly by the screenshot activity rather than through get_scanner_client().
 """
 
 import asyncio
 import base64
-import os
 from pathlib import Path
 
 from playwright.async_api import BrowserContext, async_playwright
@@ -34,6 +33,7 @@ from pydantic import BaseModel
 from temporalio import activity
 
 from core.models import Finding
+from scanner.client import resolve_container_host
 
 _SOURCE_VIEWER_SELECTORS = [
     "table",
@@ -50,29 +50,38 @@ class FindingExtraction(BaseModel):
 
 _playwright = None
 _browser = None
-_context: BrowserContext | None = None
+_contexts_by_token: dict[str, BrowserContext] = {}
 _init_lock = asyncio.Lock()
 
 
-async def _get_context() -> BrowserContext:
-    global _playwright, _browser, _context
+async def _get_context(token: str) -> BrowserContext:
+    """
+    One shared Browser for the life of the worker process (one launch
+    total), but one Context per distinct token - different configs
+    (`codescan run` against different SonarQube instances/accounts) need
+    different Basic-auth headers, and a Context's extra_http_headers are
+    fixed at creation time.
+    """
+    global _playwright, _browser
 
     async with _init_lock:
-        if _context is None:
-            token = base64.b64encode(f"{os.environ['SONAR_TOKEN']}:".encode()).decode()
+        if _browser is None:
             _playwright = await async_playwright().start()
             _browser = await _playwright.chromium.launch()
+
+        if token not in _contexts_by_token:
+            auth = base64.b64encode(f"{token}:".encode()).decode()
             # A short viewport clips the source-code table before it's fully
             # rendered/scrolled into view, so `table.screenshot()` can capture
             # a mostly-empty region (e.g. just the inline issue annotation,
             # with the flagged code line itself out of frame). A generously
             # tall viewport avoids needing to scroll at all.
-            _context = await _browser.new_context(
-                extra_http_headers={"Authorization": f"Basic {token}"},
+            _contexts_by_token[token] = await _browser.new_context(
+                extra_http_headers={"Authorization": f"Basic {auth}"},
                 viewport={"width": 1280, "height": 2000},
             )
 
-    return _context
+    return _contexts_by_token[token]
 
 
 async def _extract_code_snippet(locator, finding: Finding) -> str | None:
@@ -107,12 +116,15 @@ async def _extract_annotation_text(page, finding: Finding) -> str | None:
         return None
 
 
-async def capture_finding_screenshot(finding: Finding, out_path: Path) -> FindingExtraction:
-    context = await _get_context()
+async def capture_finding_screenshot(finding: Finding, out_path: Path, token: str) -> FindingExtraction:
+    context = await _get_context(token)
     page = await context.new_page()
 
     try:
-        target_url = finding.deep_link + f"&open={finding.key}"
+        # deep_link is human-facing (shown in Jira) - this browser runs
+        # inside the worker container, so it needs the container-reachable
+        # form of the same host, same as scanner/client.py's API requests.
+        target_url = resolve_container_host(finding.deep_link) + f"&open={finding.key}"
         await page.goto(target_url, wait_until="networkidle", timeout=30000)
 
         for selector in _SOURCE_VIEWER_SELECTORS:

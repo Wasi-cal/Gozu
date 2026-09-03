@@ -21,7 +21,13 @@ from crypto_utils import decrypt_token, encrypt_token
 
 
 def get_connection() -> psycopg.Connection[dict[str, Any]]:
-    return psycopg.connect(
+    # `psycopg.connect` is `Connection.connect`, a classmethod returning
+    # `Self` - calling it unparameterized (the usual `psycopg.connect(...)`)
+    # can't infer the row type from `row_factory` through `Self` in every
+    # type checker (mypy accepts it; pyright doesn't). Parameterizing
+    # `Connection` explicitly before `.connect(...)` resolves `Self`
+    # correctly for both.
+    return psycopg.Connection[dict[str, Any]].connect(
         host=os.environ["POSTGRES_HOST"],
         port=os.environ["POSTGRES_PORT"],
         user=os.environ["POSTGRES_USER"],
@@ -37,6 +43,7 @@ def create_config(
     scanner_mode: str,
     ticket_backend: str,
     trigger_mode: str,
+    project_key: str,
     credentials: dict[str, str],
 ) -> int:
     """
@@ -44,12 +51,18 @@ def create_config(
     `credentials` (each value encrypted before insert), in a single
     transaction - if the credentials insert fails, the configs row isn't
     left behind either. Returns the new config's id.
+
+    project_key lives on `configs` itself, not in `credentials` - it's not
+    a secret, and config_credentials' decrypt-on-read loop would break
+    trying to Fernet-decrypt a plaintext value. Nullable at the DB level
+    (configs created before this field existed predate it), but every new
+    config created here always has one - the CLI wizard prompts for it.
     """
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO configs (name, scanner_type, scanner_mode, ticket_backend, trigger_mode) "
-            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (name, scanner_type, scanner_mode, ticket_backend, trigger_mode),
+            "INSERT INTO configs (name, scanner_type, scanner_mode, ticket_backend, trigger_mode, project_key) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (name, scanner_type, scanner_mode, ticket_backend, trigger_mode, project_key),
         )
         row = cur.fetchone()
         if row is None:

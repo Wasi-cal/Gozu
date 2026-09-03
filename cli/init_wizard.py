@@ -10,6 +10,7 @@ option strings - this is a deliberate, fixed choice given how many
 branching selects this wizard has, not a per-prompt toss-up.
 """
 
+import os
 import secrets
 
 import questionary
@@ -20,9 +21,12 @@ from cli.help_links import print_help_link
 from cli.prerequisites import ensure_java
 from scanner.client import SCANNER_REGISTRY
 from scripts.bootstrap_env import (
+    DEFAULT_PORTS,
+    ENV_PATH,
     FernetKeySafetyError,
     bootstrap_env,
     load_into_environ,
+    parse_env_file,
     resolve_ports,
 )
 
@@ -44,7 +48,14 @@ def _prompt_text(label: str, field: str | None = None, default: str = "") -> str
 def _step_bootstrap_env() -> None:
     typer.secho("Step 1/4: environment (.env)", bold=True)
 
-    ports = resolve_ports()
+    # Prefer whatever's already in .env for a port that's already set - a
+    # fresh probe would see it as "taken" once the service it belongs to
+    # (e.g. SonarQube itself) is actually running on it, and wrongly
+    # suggest the next free port instead of the correct, already-working one.
+    existing = parse_env_file(ENV_PATH)
+    probed = resolve_ports()
+    ports = {name: int(existing[name]) if name in existing else probed[name] for name in DEFAULT_PORTS}
+
     typer.echo("Ports that will be used (auto-detected as free - override any of them below):")
     overrides: dict[str, int] = {}
     for name, port in ports.items():
@@ -104,21 +115,37 @@ def _generate_or_prompt_secret(label: str) -> str:
     return generated
 
 
-def _collect_local_sonar() -> tuple[dict[str, str], str]:
+def _prompt_project_key() -> str:
     """
-    Returns (credentials, trigger_mode). Local self-hosted SonarQube is the
-    backend the webhook receiver (receiver/app.py) already exists for, so
-    trigger_mode defaults to "webhook" here and a webhook secret is
-    collected to match receiver/verify_signature.py's HMAC check.
+    Required for every new config: `codescan run` needs it for both the
+    sonar-scanner command and the issues-fetch API call, and unlike the old
+    webhook path there's no incoming payload to pull it from anymore.
     """
-    host_url = _prompt_text("SonarQube host URL:", default="http://localhost:9000")
+    while True:
+        key = _prompt_text("SonarQube project key:", field="sonar_project_key").strip()
+        if key:
+            return key
+        typer.secho("Project key can't be empty.", fg=typer.colors.RED)
+
+
+def _collect_local_sonar() -> tuple[dict[str, str], str, str]:
+    """
+    Returns (credentials, trigger_mode, project_key). Local self-hosted
+    SonarQube is the backend the webhook receiver (receiver/app.py) already
+    exists for, so trigger_mode defaults to "webhook" here and a webhook
+    secret is collected to match receiver/verify_signature.py's HMAC check.
+    """
+    default_host = f"http://localhost:{os.environ.get('SONARQUBE_PORT', '9000')}"
+    host_url = _prompt_text("SonarQube host URL:", default=default_host)
     token = _prompt_text("SonarQube token:", field="sonar_token_local")
+    project_key = _prompt_project_key()
     webhook_secret = _generate_or_prompt_secret("Webhook secret")
-    return {"sonar_host_url": host_url, "sonar_token": token, "webhook_secret": webhook_secret}, "webhook"
+    credentials = {"sonar_host_url": host_url, "sonar_token": token, "webhook_secret": webhook_secret}
+    return credentials, "webhook", project_key
 
 
-def _collect_cloud_sonar() -> tuple[dict[str, str], str]:
-    """Returns (credentials, trigger_mode)."""
+def _collect_cloud_sonar() -> tuple[dict[str, str], str, str]:
+    """Returns (credentials, trigger_mode, project_key)."""
     plan = _ask_or_exit(questionary.select("Free plan or Premium?", choices=["Free", "Premium"]))
 
     credentials: dict[str, str] = {}
@@ -126,6 +153,7 @@ def _collect_cloud_sonar() -> tuple[dict[str, str], str]:
     credentials["sonar_organization"] = _ask_or_exit(questionary.text("SonarQube Cloud organization key:"))
     print_help_link("sonar_token_cloud")
     credentials["sonar_token"] = _ask_or_exit(questionary.text("SonarQube Cloud token:"))
+    project_key = _prompt_project_key()
 
     if plan == "Premium":
         use_webhook = _ask_or_exit(questionary.confirm("Use a webhook?", default=True))
@@ -136,8 +164,8 @@ def _collect_cloud_sonar() -> tuple[dict[str, str], str]:
                 "Which branch should be scoped for analysis? (branch analysis is Premium-only)",
                 default="main",
             )
-            return credentials, "webhook"
-        return credentials, "direct"
+            return credentials, "webhook", project_key
+        return credentials, "direct", project_key
 
     typer.secho(
         "SonarQube Cloud's Free plan doesn't invoke webhooks, so that trigger isn't offered here.", dim=True
@@ -152,7 +180,7 @@ def _collect_cloud_sonar() -> tuple[dict[str, str], str]:
             ],
         )
     )
-    return credentials, trigger_mode
+    return credentials, trigger_mode, project_key
 
 
 def _collect_jira() -> dict[str, str]:
@@ -189,9 +217,9 @@ def run_init_wizard() -> None:
     scanner_mode = _select_scanner_mode()
 
     if scanner_mode == "local":
-        credentials, trigger_mode = _collect_local_sonar()
+        credentials, trigger_mode, project_key = _collect_local_sonar()
     else:
-        credentials, trigger_mode = _collect_cloud_sonar()
+        credentials, trigger_mode, project_key = _collect_cloud_sonar()
 
     credentials.update(_collect_jira())
 
@@ -204,12 +232,19 @@ def run_init_wizard() -> None:
         scanner_mode=scanner_mode,
         ticket_backend="jira",
         trigger_mode=trigger_mode,
+        project_key=project_key,
         credentials=credentials,
     )
 
     typer.secho("\nConfig created:", bold=True, fg=typer.colors.GREEN)
     typer.echo(f"  name:           {name}")
     typer.echo(f"  scanner:        {SCANNER_REGISTRY.get(scanner_type, scanner_type)} ({scanner_mode})")
+    typer.echo(f"  project key:    {project_key}")
     typer.echo("  ticket backend: jira")
     typer.echo(f"  trigger mode:   {trigger_mode}")
-    typer.echo("\n`codescan run` isn't implemented yet - that's a later phase.")
+    typer.echo("\n`codescan run --config " + name + "` will use this config.")
+    typer.secho(
+        "\nNote: any config created before this project_key field existed (e.g. test1, test1cloud) "
+        "has no project_key and must be recreated via `codescan init` before `codescan run` can use it.",
+        dim=True,
+    )

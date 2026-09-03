@@ -454,6 +454,135 @@ prompts for an explicit `yes` before generating a replacement key (which
 makes the earlier config's credentials permanently undecryptable - that's
 the point of the check).
 
+## Phase 3: Running Scans
+
+Phase 3 adds `codescan run`: scan, wait for SonarQube's *server-side*
+processing to actually finish (not just the scanner subprocess exiting),
+then trigger `ScanToTicketWorkflow` directly - no webhook involved. Plus
+`--watch` for looping it on an interval.
+
+**Two retroactive fixes landed first** (found while designing this phase):
+
+- **`project_key`** is now part of every config - `configs.project_key`
+  (nullable at the DB level via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`,
+  so `test1`/`test1cloud` from Phase 2 aren't broken by a `NOT NULL`
+  constraint), but a required wizard prompt for any *new* config. Neither
+  wizard path used to collect a project key at all - the old webhook
+  payload carried the project key implicitly; direct invocation has no
+  such payload, so `codescan run` needs it explicitly for both the
+  `sonar-scanner` command and the issues-fetch API call.
+
+  **`test1` and `test1cloud` predate this field and have no project_key -
+  recreate them with `codescan init` before using them with `codescan run`.**
+- The wizard's Local-mode host URL default now reads the actual
+  `SONARQUBE_PORT` `bootstrap_env.py` resolved (auto-incremented past a
+  port conflict) instead of a hardcoded `http://localhost:9000`, which
+  was wrong whenever 9000 was taken.
+
+**Two real bugs were found and fixed via live testing** while building this
+(not just found in code review - both only showed up running a real scan
+against a real config):
+
+1. **`fetch_findings_activity`/`create_tickets_activity` didn't know about
+   per-config credentials at all.** They called `scanner/client.py`'s
+   `get_scanner_client()`/`ticket/client.py`'s `get_ticket_client()`, which
+   read `SONAR_HOST_URL`/`SONAR_TOKEN`/`JIRA_*` from the *worker
+   container's own* `.env` - not from whichever config `codescan run`
+   selected. Fixed by extending `SonarToJiraInput` (and two new narrow
+   per-activity models, `FetchFindingsInput`/`CreateTicketsInput`) to carry
+   the selected config's `scanner_type`/`scanner_mode`/`ticket_backend`/
+   `credentials`, and splitting each client factory into a pure
+   `build_scanner_client()`/`build_ticket_client()` (explicit params, no
+   env reads) plus a thin `get_scanner_client()`/`get_ticket_client()` env
+   wrapper around it for the webhook receiver, which still has no concept
+   of a "config" and is unaffected (empty `credentials` falls back to the
+   env-var path exactly as before).
+2. **`localhost` in a config's `sonar_host_url` is unreachable from inside
+   the worker container.** `codescan run` (and SonarQube itself) run on
+   the host; the worker runs in Docker Compose's own network. Fixed with
+   `scanner/client.py`'s `resolve_container_host()`, applied only to
+   requests the worker process makes itself (SonarQube API calls,
+   `scanner/screenshot.py`'s Playwright navigation) via
+   `host.docker.internal` - **never** to a `Finding.deep_link`, which stays
+   human-facing (shown in Jira ticket descriptions, must resolve from a
+   real browser outside Docker). `docker-compose.yml`'s `worker` service
+   got an `extra_hosts: host.docker.internal:host-gateway` entry so this
+   resolves on Linux too (native on Docker Desktop already).
+
+**What got added:**
+
+- **`cli/prerequisites.py`**: `check_sonar_scanner()`/`ensure_sonar_scanner()`,
+  same shape as `check_java()`/`ensure_java()` - downloads the official
+  sonar-scanner CLI distribution for the host's OS/arch into
+  `~/.codescan/sonar-scanner/` if none is found on PATH or from a previous
+  download, no system-wide install. `java_env()` builds a `JAVA_HOME`/`PATH`
+  environment for running sonar-scanner, so a managed JRE actually gets
+  found by its launcher script.
+- **`cli/scan_runner.py`**: `select_config(name)` (explicit name, auto-select
+  the only one, or an informed questionary select among several) and
+  `run_scan_cycle(config, path)` - the full scan-to-ticket cycle: ensure
+  prerequisites, build and run the `sonar-scanner` command from the
+  config (Local: `sonar_host_url` + token; Cloud: `sonarcloud.io` +
+  organization + token), read `.scannerwork/report-task.txt`'s `ceTaskId`,
+  poll `GET {host}/api/ce/task?id={ceTaskId}` every 2s (5 minute timeout,
+  `FAILED`/`CANCELED` raise clearly) until `SUCCESS`, then trigger
+  `ScanToTicketWorkflow` with workflow ID `sonar-jira-{ceTaskId}` (same
+  deterministic-ID idempotency pattern the webhook receiver uses) and wait
+  for its result.
+- **`cli/main.py`**'s `run` command: `--config`/`-c` (optional - auto/interactive
+  select if omitted), `--watch` (loop instead of running once), `--interval`
+  (seconds, default 300, only meaningful with `--watch`), `--path` (default
+  `.`). `--watch` catches `Ctrl+C` and prints a clean "stopping" message.
+
+### Running it
+
+```bash
+codescan init          # recreate test1/test1cloud if they predate project_key
+codescan run --config test1
+```
+
+Expected output, in order: `Running sonar-scanner against . ...` (the
+scanner's own output isn't streamed live - it's captured and only shown in
+full if the scanner exits non-zero) -> `sonar-scanner finished; waiting for
+SonarQube analysis task <ceTaskId> ...` -> `Analysis finished - triggering
+ScanToTicketWorkflow ...` -> a summary:
+
+```
+Done: created 2 ticket(s), skipped 0 already-ticketed finding(s) (SonarQube task <ceTaskId>)
+  created SONAR-3 for finding AbCdEfGh...
+  created SONAR-4 for finding ZyXwVuTs...
+```
+
+**`--watch` example:**
+
+```bash
+codescan run --config test1 --watch --interval 600
+```
+
+Runs the same cycle every 10 minutes until `Ctrl+C`, printing a fresh
+summary each time.
+
+### Confirming dedupe still holds through direct invocation
+
+Exactly like the old webhook path, dedupe is a label
+(`source-key-{finding_key}`) checked by `find_existing()` before creating
+anything - `codescan run` doesn't change that logic, only how the
+workflow gets triggered. To confirm:
+
+1. Run `codescan run --config test1` once against a project with at least
+   one flagged issue - note the `created` count and ticket key(s).
+2. Run it again, unchanged, against the same code:
+   ```bash
+   codescan run --config test1
+   ```
+   This submits a *new* SonarQube analysis (a new `ceTaskId`, so a new
+   `sonar-jira-{ceTaskId}` workflow), but `create_tickets_activity` calls
+   `find_existing()` per finding before creating anything - the same
+   `source-key-{finding_key}` labels from step 1 are still there.
+3. Confirm the second run's summary shows `created 0` and `skipped N`
+   matching step 1's `created` count, and that Jira still shows exactly
+   one ticket per finding (no duplicates).
+
 ## Prerequisites
 
 - Docker (for SonarQube Community Build)

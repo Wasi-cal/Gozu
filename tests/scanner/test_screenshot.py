@@ -73,7 +73,7 @@ async def test_capture_finding_screenshot_extracts_code_snippet(tmp_path):
     out_path = tmp_path / "out.png"
 
     with patch_context(page):
-        result = await capture_finding_screenshot(make_finding(), out_path)
+        result = await capture_finding_screenshot(make_finding(), out_path, "test-token")
 
     assert isinstance(result, FindingExtraction)
     assert result.screenshot_path == out_path
@@ -87,7 +87,7 @@ async def test_capture_finding_screenshot_handles_inner_text_failure(tmp_path):
     out_path = tmp_path / "out.png"
 
     with patch_context(page):
-        result = await capture_finding_screenshot(make_finding(), out_path)
+        result = await capture_finding_screenshot(make_finding(), out_path, "test-token")
 
     assert result.screenshot_path == out_path
     assert result.code_snippet is None
@@ -99,7 +99,7 @@ async def test_capture_finding_screenshot_annotation_text_none_when_no_header_pr
     out_path = tmp_path / "out.png"
 
     with patch_context(page):
-        result = await capture_finding_screenshot(make_finding(), out_path)
+        result = await capture_finding_screenshot(make_finding(), out_path, "test-token")
 
     assert result.annotation_text is None
     assert result.code_snippet == "code"
@@ -116,7 +116,7 @@ async def test_capture_finding_screenshot_annotation_text_captured(tmp_path):
     out_path = tmp_path / "out.png"
 
     with patch_context(page):
-        result = await capture_finding_screenshot(make_finding(), out_path)
+        result = await capture_finding_screenshot(make_finding(), out_path, "test-token")
 
     assert result.annotation_text == "Fix this issue."
     assert result.code_snippet == "code"
@@ -135,7 +135,7 @@ async def test_capture_finding_screenshot_annotation_extraction_failure_returns_
     out_path = tmp_path / "out.png"
 
     with patch_context(page):
-        result = await capture_finding_screenshot(make_finding(), out_path)
+        result = await capture_finding_screenshot(make_finding(), out_path, "test-token")
 
     assert result.annotation_text is None
     assert result.code_snippet == "code"

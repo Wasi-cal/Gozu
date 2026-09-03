@@ -54,6 +54,12 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
+    # Lets scanner/client.py's resolve_container_host() reach a host-side
+    # "local" SonarQube (config.sonar_host_url=http://localhost:PORT) via
+    # host.docker.internal - built into Docker Desktop (macOS/Windows)
+    # already; this entry is what makes the same hostname resolve on Linux.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       TEMPORAL_HOST: temporal:7233
       POSTGRES_HOST: postgres

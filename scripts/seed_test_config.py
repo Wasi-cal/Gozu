@@ -22,6 +22,7 @@ CONFIG_FIELDS = {
     "scanner_mode": "local",
     "ticket_backend": "jira",
     "trigger_mode": "direct",
+    "project_key": "test-project",
 }
 
 CREDENTIALS = {

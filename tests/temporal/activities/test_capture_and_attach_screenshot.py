@@ -40,7 +40,7 @@ def make_input() -> ScreenshotAttachInput:
 
 
 def patched_extraction(screenshot_path=None, code_snippet=None, annotation_text=None):
-    async def fake_capture(finding, out_path):
+    async def fake_capture(finding, out_path, token):
         return FindingExtraction(
             screenshot_path=screenshot_path or out_path,
             code_snippet=code_snippet,
