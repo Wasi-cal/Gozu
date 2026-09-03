@@ -5,7 +5,8 @@ import subprocess
 from temporalio import activity
 
 from core.models import Finding
-from scanner.client import get_scanner_client
+from scanner.client import build_scanner_client, get_scanner_client
+from temporal.models.fetch_findings import FetchFindingsInput
 
 
 def _get_git_branch() -> str | None:
@@ -29,9 +30,13 @@ def _get_git_branch() -> str | None:
 
 
 @activity.defn
-async def fetch_findings_activity(project_key: str) -> list[Finding]:
-    client = get_scanner_client()
-    findings = client.fetch_findings(project_key)
+async def fetch_findings_activity(input: FetchFindingsInput) -> list[Finding]:
+    client = (
+        build_scanner_client(input.scanner_type, input.scanner_mode, input.credentials)
+        if input.credentials
+        else get_scanner_client()
+    )
+    findings = client.fetch_findings(input.project_key)
 
     branch = _get_git_branch()
     for finding in findings:

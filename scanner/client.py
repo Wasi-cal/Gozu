@@ -9,12 +9,39 @@ workflow/activities/receiver needs to change.
 
 import os
 from abc import ABC, abstractmethod
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 from pydantic import BaseModel
 from temporalio import activity
 
 from core.models import Finding, Severity
+
+
+def resolve_container_host(url: str) -> str:
+    """
+    The worker always runs inside the Docker Compose network
+    (docker-compose.yml); a config's `sonar_host_url` is a *host*-side
+    address (wherever `codescan run` reaches SonarQube from), which
+    "localhost"/"127.0.0.1" never resolves to from inside the worker's
+    own container. `host.docker.internal` does - natively on Docker
+    Desktop, or via the "host.docker.internal:host-gateway" extra_hosts
+    entry on Linux (see docker-compose.yml's worker service).
+
+    Only for requests this process makes itself - a Finding's deep_link is
+    deliberately left untouched (it's human-facing, shown in Jira ticket
+    descriptions, and must stay resolvable from a browser outside Docker
+    entirely) - see scanner/screenshot.py, which applies this separately
+    to the URL it navigates to, for exactly that reason.
+    """
+    parts = urlsplit(url)
+    if parts.hostname not in ("localhost", "127.0.0.1"):
+        return url
+
+    netloc = "host.docker.internal"
+    if parts.port:
+        netloc += f":{parts.port}"
+    return urlunsplit(parts._replace(netloc=netloc))
 
 # SonarQube's severity scale -> our normalized Severity. Anything not in
 # here (including hotspots, which report a "vulnerability probability" of
@@ -76,7 +103,8 @@ class SonarQubeServerClient(ScannerClient):
     """Real implementation for self-hosted SonarQube (Community Build, etc)."""
 
     def __init__(self, base_url: str, token: str):
-        self.base_url = base_url.rstrip("/")
+        self.base_url = base_url.rstrip("/")  # human-facing - used only for Finding.deep_link
+        self._request_base_url = resolve_container_host(self.base_url)  # what this process actually calls
         self.token = token
         self._rule_name_cache: dict[str, str] = {}
 
@@ -91,7 +119,7 @@ class SonarQubeServerClient(ScannerClient):
         name = rule_key
         try:
             response = requests.get(
-                f"{self.base_url}/api/rules/show",
+                f"{self._request_base_url}/api/rules/show",
                 params={"key": rule_key},
                 auth=self._auth(),
             )
@@ -119,7 +147,7 @@ class SonarQubeServerClient(ScannerClient):
         return f"{type_label} [{rule_name}]: {message} ({location})"
 
     def _fetch_vulnerabilities(self, project_key: str) -> list[Finding]:
-        url = f"{self.base_url}/api/issues/search"
+        url = f"{self._request_base_url}/api/issues/search"
         params = {
             "componentKeys": project_key,
             "types": "VULNERABILITY",
@@ -155,7 +183,7 @@ class SonarQubeServerClient(ScannerClient):
         return findings
 
     def _fetch_hotspots(self, project_key: str) -> list[Finding]:
-        url = f"{self.base_url}/api/hotspots/search"
+        url = f"{self._request_base_url}/api/hotspots/search"
         params = {
             "projectKey": project_key,
             "status": "TO_REVIEW",
@@ -226,29 +254,46 @@ class SonarQubeCloudClient(ScannerClient):
         return ScannerRequirements(docker_services=[], host_dependencies=["java"])
 
 
+def build_scanner_client(scanner_type: str, scanner_mode: str, credentials: dict[str, str]) -> ScannerClient:
+    """
+    Pure constructor: build a ScannerClient from explicit params, no env
+    reads. This is what a specific config's credentials (config_store.
+    get_config(), as used by `codescan run`) go through; get_scanner_client()
+    below is a thin env-reading wrapper around this for the legacy
+    single-global-config path (the webhook receiver).
+    """
+    if scanner_type != "sonarqube":
+        raise ValueError(f"Unrecognized scanner_type '{scanner_type}'. Expected 'sonarqube'.")
+
+    token = credentials.get("sonar_token", "")
+    if scanner_mode == "local":
+        return SonarQubeServerClient(base_url=credentials.get("sonar_host_url", "http://localhost:9000"), token=token)
+    if scanner_mode == "cloud":
+        return SonarQubeCloudClient(
+            base_url="https://sonarcloud.io", token=token, organization=credentials.get("sonar_organization", "")
+        )
+    raise ValueError(f"Unrecognized scanner_mode '{scanner_mode}'. Expected 'local' or 'cloud'.")
+
+
 def get_scanner_client() -> ScannerClient:
     """
-    Reads SCANNER_TYPE from the environment and builds the matching
-    ScannerClient. This is the ONLY place in the codebase that should know
-    which concrete class is in use.
+    Legacy path used by the webhook receiver, which has no per-config
+    credentials of its own: reads SCANNER_TYPE/SONAR_* from the environment
+    and delegates to build_scanner_client(). This is the only place in the
+    codebase that should ever read those env vars for this purpose.
 
     Falls back to the old SONAR_MODE var ("local"/"cloud") if SCANNER_TYPE
     isn't set, so existing .env files keep working.
     """
-    scanner_type = os.environ.get("SCANNER_TYPE")
-    if not scanner_type:
-        legacy_mode = os.environ.get("SONAR_MODE", "local")
-        scanner_type = "sonarqube-cloud" if legacy_mode == "cloud" else "sonarqube"
-
-    base_url = os.environ.get("SONAR_HOST_URL", "http://localhost:9000")
-    token = os.environ.get("SONAR_TOKEN", "")
-
-    if scanner_type == "sonarqube":
-        return SonarQubeServerClient(base_url=base_url, token=token)
-    elif scanner_type == "sonarqube-cloud":
-        organization = os.environ.get("SONAR_ORGANIZATION", "")
-        return SonarQubeCloudClient(base_url=base_url, token=token, organization=organization)
+    legacy_type = os.environ.get("SCANNER_TYPE")
+    if legacy_type:
+        scanner_mode = "cloud" if legacy_type == "sonarqube-cloud" else "local"
     else:
-        raise ValueError(
-            f"Unrecognized SCANNER_TYPE '{scanner_type}'. Expected 'sonarqube' or 'sonarqube-cloud'."
-        )
+        scanner_mode = "cloud" if os.environ.get("SONAR_MODE") == "cloud" else "local"
+
+    credentials = {
+        "sonar_host_url": os.environ.get("SONAR_HOST_URL", "http://localhost:9000"),
+        "sonar_token": os.environ.get("SONAR_TOKEN", ""),
+        "sonar_organization": os.environ.get("SONAR_ORGANIZATION", ""),
+    }
+    return build_scanner_client("sonarqube", scanner_mode, credentials)

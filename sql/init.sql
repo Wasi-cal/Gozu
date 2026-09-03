@@ -24,9 +24,21 @@ CREATE TABLE IF NOT EXISTS configs (
     scanner_mode   TEXT NOT NULL,                -- "local" or "cloud"
     ticket_backend TEXT NOT NULL DEFAULT 'jira',
     trigger_mode   TEXT NOT NULL,                -- "direct", "webhook", "watch", "github_poll", ...
+    project_key    TEXT,                         -- nullable: configs created before Phase 3 predate this
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Phase 3 migration for a volume that already ran the CREATE TABLE above
+-- without `project_key` - CREATE TABLE IF NOT EXISTS is a no-op on an
+-- existing table, so this is what actually adds the column to it. Nullable
+-- at the DB level so pre-existing configs aren't broken by a NOT NULL
+-- constraint; the CLI wizard still treats it as a required prompt for any
+-- new config (see cli/init_wizard.py) - `codescan run` needs it (no more
+-- webhook payload to pull it from), so a config created before this
+-- migration must be recreated via `codescan init` before it can be used
+-- with `codescan run`.
+ALTER TABLE configs ADD COLUMN IF NOT EXISTS project_key TEXT;
 
 -- Lookups are by name (config_store.get_config(name), delete_config(name)).
 -- No separate CREATE INDEX needed: the UNIQUE constraint on `name` above

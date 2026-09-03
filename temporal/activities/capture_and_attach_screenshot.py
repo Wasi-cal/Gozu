@@ -1,5 +1,6 @@
 """Activity: capture a screenshot of a finding and attach it to its ticket."""
 
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -8,7 +9,7 @@ from temporalio import activity
 
 from scanner.screenshot import capture_finding_screenshot
 from temporal.models.screenshot_attach import ScreenshotAttachInput
-from ticket.client import get_ticket_client
+from ticket.client import build_ticket_client, get_ticket_client
 
 
 @activity.defn
@@ -19,9 +20,10 @@ async def capture_and_attach_screenshot_activity(input: ScreenshotAttachInput) -
     screenshot_path = Path(tmp_dir) / f"{finding.source_tool}-{finding.key}.png"
 
     try:
-        extraction = await capture_finding_screenshot(finding, screenshot_path)
+        token = input.credentials.get("sonar_token", os.environ.get("SONAR_TOKEN", ""))
+        extraction = await capture_finding_screenshot(finding, screenshot_path, token)
 
-        client = get_ticket_client()
+        client = build_ticket_client(input.ticket_backend, input.credentials) if input.credentials else get_ticket_client()
 
         attach_screenshot = getattr(client, "attach_screenshot", None)
         if attach_screenshot is not None:

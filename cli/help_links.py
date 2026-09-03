@@ -17,6 +17,7 @@ HELP_LINKS: dict[str, str] = {
     "sonar_token_local": "https://docs.sonarsource.com/sonarqube-server/latest/user-guide/managing-tokens/",
     "sonar_token_cloud": "https://docs.sonarsource.com/sonarqube-cloud/managing-your-account/managing-tokens",
     "sonar_organization": "https://docs.sonarsource.com/sonarqube-cloud/getting-started/viewing-organizations",
+    "sonar_project_key": "https://docs.sonarsource.com/sonarqube-server/project-administration/maintaining-project/changing-project-key",
     "sonar_branch": "https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/branch-analysis/branch-analysis",
     "jira_api_token": "https://id.atlassian.com/manage-profile/security/api-tokens",
     "jira_email": "https://id.atlassian.com/manage-profile/profile-and-visibility",

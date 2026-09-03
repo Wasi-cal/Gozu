@@ -1,8 +1,11 @@
 """codescan CLI entrypoint (see pyproject.toml's [project.scripts])."""
 
+import time
+
 import typer
 
 from cli.init_wizard import run_init_wizard
+from cli.scan_runner import run_scan_cycle, select_config
 from scripts.bootstrap_env import load_into_environ
 
 app = typer.Typer(
@@ -28,10 +31,44 @@ def init() -> None:
     run_init_wizard()
 
 
+def _print_summary(summary: dict) -> None:
+    created = summary["created"]
+    skipped = summary["skipped"]
+    typer.secho(
+        f"Done: created {len(created)} ticket(s), skipped {len(skipped)} already-ticketed finding(s) "
+        f"(SonarQube task {summary['ce_task_id']})",
+        fg=typer.colors.GREEN,
+        bold=True,
+    )
+    for entry in created:
+        typer.echo(f"  created {entry['ticket_key']} for finding {entry['finding_key']}")
+    for finding_key in skipped:
+        typer.echo(f"  skipped finding {finding_key} (ticket already exists)")
+
+
 @app.command()
-def run() -> None:
-    """Run a scan using a saved config."""
-    typer.echo("`codescan run` is not yet implemented - coming in a later phase.")
+def run(
+    config: str = typer.Option(None, "--config", "-c", help="Name of the config to use (auto-selects if only one exists)."),
+    watch: bool = typer.Option(False, "--watch", help="Loop the scan cycle on an interval instead of running once."),
+    interval: int = typer.Option(300, "--interval", help="Seconds between cycles - only meaningful with --watch."),
+    path: str = typer.Option(".", "--path", help="Path to scan."),
+) -> None:
+    """Scan, wait for SonarQube to finish processing, then create Jira tickets for new findings."""
+    selected = select_config(config)
+
+    if not watch:
+        summary = run_scan_cycle(selected, path)
+        _print_summary(summary)
+        return
+
+    typer.echo(f"Watching every {interval}s - Ctrl+C to stop.")
+    try:
+        while True:
+            summary = run_scan_cycle(selected, path)
+            _print_summary(summary)
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        typer.echo("\nStopping.")
 
 
 @app.command()

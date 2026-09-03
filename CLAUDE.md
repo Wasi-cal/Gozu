@@ -79,3 +79,37 @@ because there's nothing to attach Temporal context to yet.
 
 Do not introduce a third logging approach (e.g. `print`, a custom logger
 wrapper, structlog, etc) anywhere in this project.
+
+## Code style: modular, reusable, no needless duplication
+
+Favor small, single-responsibility functions over long ones, and pull out
+a shared helper the moment the same shape of logic appears twice - don't
+wait for a third copy. Concretely, follow the patterns already in this
+codebase rather than inventing new ones:
+
+- **Pure-builder + env-reading-wrapper split**, for anything that can be
+  configured either explicitly or from the environment: `scanner/client.py`'s
+  `build_scanner_client(scanner_type, scanner_mode, credentials)` (no env
+  reads) vs `get_scanner_client()` (reads env vars, delegates to the
+  builder); `ticket/client.py`'s `build_ticket_client()`/`get_ticket_client()`
+  mirror it. When adding a new backend or a new per-config code path, add
+  to the pure builder and let the env-reading wrapper stay a thin
+  translation layer - don't duplicate the branching in both.
+- **Extract shared download/verify logic**, not per-tool copies: see
+  `cli/prerequisites.py`'s `_download_archive()`/`_extract_archive()`/
+  `_make_tree_executable()`/`_verify_runnable()`, shared by `ensure_java()`
+  and `ensure_sonar_scanner()`. A third `ensure_*()` for a new host
+  dependency should reuse these, not reimplement its own download loop.
+  Same idea for small derived values used in more than one place - e.g.
+  `cli/scan_runner.py`'s `_scanner_host_url(config)`, computed once and
+  reused rather than recomputed per call site.
+- **Dedicated, narrow Pydantic models per activity boundary** (interface
+  segregation) rather than one bloated shared input model: `fetch_findings_activity`
+  takes `FetchFindingsInput`, `create_tickets_activity` takes
+  `CreateTicketsInput`, not the full `SonarToJiraInput` - each activity
+  only sees the fields it actually needs.
+
+This isn't a call for premature abstraction - three near-identical lines
+inline are still fine. It's specifically about not letting the same
+piece of logic (a download-and-verify flow, a client-construction
+branch, a derived value) exist in more than one place at a time.
