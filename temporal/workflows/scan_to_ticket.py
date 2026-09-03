@@ -37,6 +37,7 @@ class ScanToTicketWorkflow:
                 credentials=input.credentials,
             ),
             start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(maximum_attempts=3),
         )
 
         workflow.logger.info(
@@ -52,6 +53,7 @@ class ScanToTicketWorkflow:
             create_tickets_activity,
             CreateTicketsInput(findings=findings, ticket_backend=input.ticket_backend, credentials=input.credentials),
             start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(maximum_attempts=3),
         )
 
         workflow.logger.info(
