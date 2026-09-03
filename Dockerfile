@@ -15,13 +15,17 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project
 
+# scanner/screenshot.py needs an actual Chromium binary - --with-deps also
+# installs the OS-level libs (fonts, etc) python:3.12-slim doesn't have,
+# without which even a present binary fails to launch headless. Placed
+# before `COPY . .` deliberately: it only depends on the playwright version
+# pinned in uv.lock, not on our own source - keeping it here means a
+# source-only change doesn't force a ~90s apt-get + Chromium re-download
+# on every rebuild.
+RUN playwright install --with-deps chromium
+
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen
-
-# scanner/screenshot.py needs an actual Chromium binary - --with-deps also
-# installs the OS-level libs (fonts, etc) python:3.12-slim doesn't have,
-# without which even a present binary fails to launch headless.
-RUN playwright install --with-deps chromium
 
 CMD ["python", "-m", "temporal.worker"]

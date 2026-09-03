@@ -4,29 +4,52 @@ from temporalio import activity
 
 from core.models import CreatedTicket, TicketResult
 from temporal.models.create_tickets import CreateTicketsInput
-from ticket.client import build_ticket_client, get_ticket_client
+from ticket import claims
+from ticket.factory import build_ticket_client, get_ticket_client
 
 
 @activity.defn
 async def create_tickets_activity(input: CreateTicketsInput) -> TicketResult:
     """
-    Dedupe is based on the "source-key-{key}" label set on the ticket at
-    creation time.
+    Dedupe is two-layered: ticket/claims.py's Postgres ledger atomically
+    claims a (destination, finding_key) pair before anything talks to Jira,
+    closing the race where two overlapping runs (concurrent multi-branch
+    fan-out, an activity retry, two configs on the same project) could both
+    pass a plain "does a ticket exist yet" check before either creates one.
+    client.find_existing()'s label search is still used as a fallback for
+    tickets that predate the ledger or were created some other way.
     """
     client = (
         build_ticket_client(input.ticket_backend, input.credentials) if input.credentials else get_ticket_client()
     )
+    destination = client.destination_id()
 
     created = []
     skipped = []
 
     for finding in input.findings:
-        existing_ticket = client.find_existing(finding.key)
-        if existing_ticket:
+        ledger_ticket = claims.get_ticket(destination, finding.key)
+        if ledger_ticket:
             skipped.append(finding.key)
             continue
 
-        ticket_key = client.create_ticket(finding)
-        created.append(CreatedTicket(finding_key=finding.key, ticket_key=ticket_key))
+        if not claims.claim(destination, finding.key):
+            # Another concurrent run holds this claim right now.
+            skipped.append(finding.key)
+            continue
+
+        try:
+            existing_ticket = client.find_existing(finding.key)
+            if existing_ticket:
+                claims.record_ticket(destination, finding.key, existing_ticket)
+                skipped.append(finding.key)
+                continue
+
+            ticket_key = client.create_ticket(finding)
+            claims.record_ticket(destination, finding.key, ticket_key)
+            created.append(CreatedTicket(finding_key=finding.key, ticket_key=ticket_key))
+        except Exception:
+            claims.release(destination, finding.key)
+            raise
 
     return TicketResult(created=created, skipped=skipped)

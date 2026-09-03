@@ -6,6 +6,8 @@ import typer
 
 from cli.init_wizard import run_init_wizard
 from cli.scan_runner import run_scan_cycle, select_config
+from cli.stack import down as stack_down
+from cli.stack import up as stack_up
 from scripts.bootstrap_env import load_into_environ
 
 app = typer.Typer(
@@ -18,7 +20,7 @@ app = typer.Typer(
 def _load_env() -> None:
     """
     Load .env (if it exists yet) into this process's environment before any
-    command runs - config_store and friends read POSTGRES_HOST etc from
+    command runs - config.store and friends read POSTGRES_HOST etc from
     os.environ, which a `source .env` in the shell normally provides, but
     codescan can't assume the caller did that.
     """
@@ -72,9 +74,15 @@ def run(
 
 
 @app.command()
+def up() -> None:
+    """Bring up the local infrastructure stack - profiles activated are determined by your configs."""
+    stack_up()
+
+
+@app.command()
 def down() -> None:
-    """Tear down the local infrastructure stack."""
-    typer.echo("`codescan down` is not yet implemented - coming in a later phase.")
+    """Stop the local infrastructure stack (containers stop; volumes/data persist)."""
+    stack_down()
 
 
 if __name__ == "__main__":

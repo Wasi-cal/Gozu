@@ -9,7 +9,7 @@ from temporalio import activity
 
 from scanner.screenshot import capture_finding_screenshot
 from temporal.models.screenshot_attach import ScreenshotAttachInput
-from ticket.client import build_ticket_client, get_ticket_client
+from ticket.factory import build_ticket_client, get_ticket_client
 
 
 @activity.defn

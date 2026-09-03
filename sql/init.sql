@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS configs (
     ticket_backend TEXT NOT NULL DEFAULT 'jira',
     trigger_mode   TEXT NOT NULL,                -- "direct", "webhook", "watch", "github_poll", ...
     project_key    TEXT,                         -- nullable: configs created before Phase 3 predate this
+    sonar_plan     TEXT,                         -- "free" or "premium" - Cloud only; null for Local or pre-Phase-5 configs
+    branches       TEXT,                         -- comma-separated (e.g. "main,release/2.0"); null/empty = no restriction
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -40,12 +42,22 @@ CREATE TABLE IF NOT EXISTS configs (
 -- with `codescan run`.
 ALTER TABLE configs ADD COLUMN IF NOT EXISTS project_key TEXT;
 
--- Lookups are by name (config_store.get_config(name), delete_config(name)).
+-- Phase 5 migration, same reasoning as project_key above: nullable so a
+-- pre-existing config isn't broken, and treated as "no restriction"
+-- wherever it's read (config/store.py, receiver/app.py, cli/scan_runner/)
+-- rather than an error - not every scanner_mode has a "plan" concept
+-- (Local configs leave sonar_plan null), and not every config tracks more
+-- than one branch (a null/empty branches list means "any branch", not
+-- "no branches").
+ALTER TABLE configs ADD COLUMN IF NOT EXISTS sonar_plan TEXT;
+ALTER TABLE configs ADD COLUMN IF NOT EXISTS branches TEXT;
+
+-- Lookups are by name (config/store.py's get_config(name), delete_config(name)).
 -- No separate CREATE INDEX needed: the UNIQUE constraint on `name` above
 -- already creates a unique b-tree index that covers exact-match lookups.
 
 -- Every credential/setting value is Fernet-encrypted ciphertext (see
--- crypto_utils.py), never plaintext - key names are backend-specific
+-- config/crypto.py), never plaintext - key names are backend-specific
 -- strings (sonar_host_url, sonar_token, sonar_organization, jira_url,
 -- jira_email, jira_api_token, jira_project_key, webhook_secret, ...),
 -- not fixed columns.
@@ -55,4 +67,26 @@ CREATE TABLE IF NOT EXISTS config_credentials (
     key        TEXT NOT NULL,
     value      TEXT NOT NULL,
     UNIQUE (config_id, key)
+);
+
+-- Idempotency ledger for ticket creation (ticket/claims.py). Closes a
+-- check-then-act race in create_tickets_activity: without this, two
+-- overlapping runs (concurrent multi-branch fan-out hitting the same
+-- underlying project, an activity retry after a partial failure, or two
+-- configs pointed at the same SonarQube + Jira project) could each search
+-- Jira, each see no existing ticket, and each create one - a duplicate.
+-- `destination` scopes this per ticket backend + project (e.g.
+-- "jira:https://x.atlassian.net:PROJ", see TicketClient.destination_id()),
+-- so two genuinely different destinations tracking the same finding_key
+-- don't collide with each other.
+--
+-- A row with ticket_key still NULL means a claim is in progress; ticket/
+-- claims.py's claim() self-heals a crashed attempt by freeing a claim
+-- that's been NULL for too long, rather than blocking that finding forever.
+CREATE TABLE IF NOT EXISTS ticket_claims (
+    destination  TEXT NOT NULL,
+    finding_key  TEXT NOT NULL,
+    ticket_key   TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (destination, finding_key)
 );

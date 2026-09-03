@@ -4,7 +4,7 @@ sets of scanner/ticket credentials, normalized so a new scanner/ticket
 backend never needs a schema change (see sql/init.sql for why).
 
 Every credential value (sonar_token, jira_api_token, webhook_secret, or
-whatever a future backend needs) is encrypted via crypto_utils before ever
+whatever a future backend needs) is encrypted via config.crypto before ever
 reaching Postgres, and decrypted only by get_config() - list_configs()
 never touches them, since it's for a picker list, not for use.
 
@@ -17,7 +17,7 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
-from crypto_utils import decrypt_token, encrypt_token
+from config.crypto import decrypt_token, encrypt_token
 
 
 def get_connection() -> psycopg.Connection[dict[str, Any]]:
@@ -45,6 +45,8 @@ def create_config(
     trigger_mode: str,
     project_key: str,
     credentials: dict[str, str],
+    sonar_plan: str | None = None,
+    branches: str | None = None,
 ) -> int:
     """
     Insert a new config row plus one config_credentials row per entry in
@@ -52,17 +54,22 @@ def create_config(
     transaction - if the credentials insert fails, the configs row isn't
     left behind either. Returns the new config's id.
 
-    project_key lives on `configs` itself, not in `credentials` - it's not
-    a secret, and config_credentials' decrypt-on-read loop would break
-    trying to Fernet-decrypt a plaintext value. Nullable at the DB level
-    (configs created before this field existed predate it), but every new
-    config created here always has one - the CLI wizard prompts for it.
+    project_key/sonar_plan/branches live on `configs` itself, not in
+    `credentials` - none are secrets, and config_credentials'
+    decrypt-on-read loop would break trying to Fernet-decrypt a plaintext
+    value. All nullable at the DB level (configs created before each field
+    existed predate it, and not every scanner_mode has a "plan" concept -
+    sonar_plan is Cloud-only, branches is optional everywhere) - treat
+    null/empty as "no restriction" wherever they're read, not an error.
+    `branches` is a comma-separated list (e.g. "main,release/2.0"), one
+    entry for a single-branch config, several for multi-branch Premium.
     """
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO configs (name, scanner_type, scanner_mode, ticket_backend, trigger_mode, project_key) "
-            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-            (name, scanner_type, scanner_mode, ticket_backend, trigger_mode, project_key),
+            "INSERT INTO configs "
+            "(name, scanner_type, scanner_mode, ticket_backend, trigger_mode, project_key, sonar_plan, branches) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (name, scanner_type, scanner_mode, ticket_backend, trigger_mode, project_key, sonar_plan, branches),
         )
         row = cur.fetchone()
         if row is None:
@@ -114,9 +121,22 @@ def delete_config(name: str) -> bool:
         return cur.rowcount > 0
 
 
-def count_configs() -> int:
-    """Plain row count of `configs` - used by bootstrap_env.py's FERNET_KEY safety check."""
+def set_credential(name: str, key: str, value: str) -> None:
+    """
+    Insert or update a single credential on an existing config, encrypting
+    `value` first. Used by `codescan up` to persist a generated
+    webhook_secret onto a config that predates one - not a general
+    config-editing API (create_config() is still the only way to set
+    everything else). Raises ValueError if no config named `name` exists.
+    """
     with get_connection() as conn, conn.cursor() as cur:
-        cur.execute("SELECT count(*) AS count FROM configs")
+        cur.execute("SELECT id FROM configs WHERE name = %s", (name,))
         row = cur.fetchone()
-        return row["count"] if row is not None else 0
+        if row is None:
+            raise ValueError(f"No config named '{name}'")
+
+        cur.execute(
+            "INSERT INTO config_credentials (config_id, key, value) VALUES (%s, %s, %s) "
+            "ON CONFLICT (config_id, key) DO UPDATE SET value = EXCLUDED.value",
+            (row["id"], key, encrypt_token(value)),
+        )
