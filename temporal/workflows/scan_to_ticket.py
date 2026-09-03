@@ -35,6 +35,7 @@ class ScanToTicketWorkflow:
                 scanner_type=input.scanner_type,
                 scanner_mode=input.scanner_mode,
                 credentials=input.credentials,
+                branch=input.branch,
             ),
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(maximum_attempts=3),

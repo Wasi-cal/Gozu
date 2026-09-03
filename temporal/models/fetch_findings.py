@@ -8,3 +8,4 @@ class FetchFindingsInput(BaseModel):
     scanner_type: str = "sonarqube"
     scanner_mode: str = "local"
     credentials: dict[str, str] = {}
+    branch: str | None = None

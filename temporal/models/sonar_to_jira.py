@@ -19,3 +19,13 @@ class SonarToJiraInput(BaseModel):
     scanner_mode: str = "local"
     ticket_backend: str = "jira"
     credentials: dict[str, str] = {}
+
+    # The git branch of whatever was actually scanned. Computed on the
+    # *host* by cli/scan_runner.py (which has real git access to the
+    # scanned path) and passed through here - the worker container has no
+    # .git at all (excluded via .dockerignore), so fetch_findings_activity
+    # can never determine this by introspecting its own filesystem. None
+    # (the webhook receiver's default - it has no host path to inspect
+    # either) falls back to that same, structurally-limited in-container
+    # attempt for backward compatibility, not because it's expected to work.
+    branch: str | None = None

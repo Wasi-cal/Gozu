@@ -19,4 +19,9 @@ COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen
 
+# scanner/screenshot.py needs an actual Chromium binary - --with-deps also
+# installs the OS-level libs (fonts, etc) python:3.12-slim doesn't have,
+# without which even a present binary fails to launch headless.
+RUN playwright install --with-deps chromium
+
 CMD ["python", "-m", "temporal.worker"]

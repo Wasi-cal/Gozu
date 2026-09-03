@@ -11,11 +11,13 @@ from temporal.models.fetch_findings import FetchFindingsInput
 
 def _get_git_branch() -> str | None:
     """
-    SonarQube Community Build doesn't report per-issue branch info via its
-    API (that's a Developer Edition+ feature), so this reads the branch
-    that's actually checked out in this worker's own working directory -
-    accurate for this project's local, single-checkout setup, but not a
-    substitute for real branch-aware analysis.
+    Fallback only, used when nothing supplied FetchFindingsInput.branch
+    (the webhook receiver's path - it has no host git checkout to inspect
+    either). Reads the branch checked out in the *worker container's own*
+    working directory, which structurally can't reflect anything real:
+    the image never contains a .git directory (excluded via
+    .dockerignore) - this exists to preserve prior behavior, not because
+    it's expected to resolve to anything but None in practice.
     """
     try:
         result = subprocess.run(
@@ -38,7 +40,7 @@ async def fetch_findings_activity(input: FetchFindingsInput) -> list[Finding]:
     )
     findings = client.fetch_findings(input.project_key)
 
-    branch = _get_git_branch()
+    branch = input.branch if input.branch is not None else _get_git_branch()
     for finding in findings:
         finding.branch = branch
 

@@ -168,7 +168,25 @@ def _wait_for_analysis(host_url: str, token: str, ce_task_id: str) -> None:
         time.sleep(_POLL_INTERVAL_SECONDS)
 
 
-async def _trigger_workflow(config: dict, ce_task_id: str) -> TicketResult:
+def _detect_git_branch(path: str) -> str | None:
+    """
+    The branch actually checked out at `path` on the *host* - the worker
+    container has no .git at all (excluded via .dockerignore), so this has
+    to happen here, where a real checkout exists, and be passed through
+    rather than asking the worker to introspect its own filesystem.
+    """
+    result = subprocess.run(
+        ["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+async def _trigger_workflow(config: dict, ce_task_id: str, branch: str | None) -> TicketResult:
     """
     Connects to the *host*-visible Temporal address (localhost:{TEMPORAL_PORT})
     - this runs on the host, not inside the Docker network, so it must NOT
@@ -197,6 +215,7 @@ async def _trigger_workflow(config: dict, ce_task_id: str) -> TicketResult:
             scanner_mode=config["scanner_mode"],
             ticket_backend=config["ticket_backend"],
             credentials=config["credentials"],
+            branch=branch,
         ),
         id=f"sonar-jira-{ce_task_id}",
         task_queue=TASK_QUEUE,
@@ -223,7 +242,8 @@ def run_scan_cycle(config: dict, path: str) -> dict:
     _wait_for_analysis(_scanner_host_url(config), config["credentials"]["sonar_token"], ce_task_id)
     typer.echo("Analysis finished - triggering ScanToTicketWorkflow ...")
 
-    ticket_result = asyncio.run(_trigger_workflow(config, ce_task_id))
+    branch = _detect_git_branch(path)
+    ticket_result = asyncio.run(_trigger_workflow(config, ce_task_id, branch))
 
     return {
         "ce_task_id": ce_task_id,
