@@ -56,11 +56,6 @@ SONAR_SEVERITY_MAP = {
 }
 DEFAULT_SEVERITY = Severity.MEDIUM
 
-TYPE_LABELS = {
-    "vulnerability": "Vulnerability",
-    "hotspot": "Hotspot",
-}
-
 # scanner_type -> display name. The single source of truth for "which
 # scanners exist" - the init wizard's scanner-selection prompt reads this
 # instead of hardcoding "sonarqube" as a magic string, so registering a
@@ -139,12 +134,17 @@ class SonarQubeServerClient(ScannerClient):
         )
         return DEFAULT_SEVERITY
 
-    def _build_title(self, finding_type: str, rule_name: str, component: str, line: int | None, message: str) -> str:
-        type_label = TYPE_LABELS.get(finding_type, finding_type)
+    def _build_title(self, rule_name: str, component: str, line: int | None) -> str:
+        """
+        The rule's own display name already reads as a clean human sentence
+        (e.g. "CSRF protections should not be disabled") - just append
+        where it was found. Deliberately drops the raw issue message and
+        finding-type label that used to be crammed into the title; both
+        still show up in the ticket description.
+        """
         relative_path = component.split(":", 1)[-1]  # component is "{project_key}:{relative/path}"
         location = f"{relative_path}:{line}" if line is not None else relative_path
-        message = " ".join(message.split())  # collapse newlines/extra whitespace
-        return f"{type_label} [{rule_name}]: {message} ({location})"
+        return f"{rule_name} ({location})"
 
     def _fetch_vulnerabilities(self, project_key: str) -> list[Finding]:
         url = f"{self._request_base_url}/api/issues/search"
@@ -170,7 +170,7 @@ class SonarQubeServerClient(ScannerClient):
             findings.append(
                 Finding(
                     key=key,
-                    title=self._build_title("vulnerability", rule_name, component, line, message),
+                    title=self._build_title(rule_name, component, line),
                     severity=self._map_severity(raw.get("severity")),
                     component=component,
                     line=line,
@@ -205,7 +205,7 @@ class SonarQubeServerClient(ScannerClient):
             findings.append(
                 Finding(
                     key=key,
-                    title=self._build_title("hotspot", rule_name, component, line, message),
+                    title=self._build_title(rule_name, component, line),
                     # hotspots don't carry a standard severity, only a "vulnerability
                     # probability" (LOW/MEDIUM/HIGH) - _map_severity falls back to
                     # MEDIUM with a warning since none of those match our scale.
