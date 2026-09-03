@@ -21,6 +21,20 @@ from receiver.verify_signature import verify_signature
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+class _HealthCheckLogFilter(logging.Filter):
+    """
+    Drops werkzeug's per-request access log line for GET /health - Docker
+    polls it every 5s (docker-compose.yml's receiver healthcheck), which
+    would otherwise bury real webhook activity in noise.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/health" not in record.getMessage()
+
+
+logging.getLogger("werkzeug").addFilter(_HealthCheckLogFilter())
+
 # No CSRF protection needed: this app has no cookies/sessions/HTML forms for
 # an attacker's page to ride on. Each route is authenticated by an
 # HMAC signature keyed to the specific config in the URL (verify_signature.py),
