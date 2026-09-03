@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codescan"
+version = "0.1.0"
+description = "Scan code with SonarQube and auto-create Jira tickets for vulnerabilities, orchestrated with Temporal."
+requires-python = ">=3.12"
+dependencies = [
+    "flask",
+    "requests",
+    "temporalio",
+    "pydantic",
+    "playwright",
+    "cryptography",
+    "psycopg[binary]",
+    "typer",
+    "questionary",
+    "pytest",
+    "pytest-asyncio",
+]
+
+[project.scripts]
+codescan = "cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+include = [
+    "core/**",
+    "scanner/**",
+    "ticket/**",
+    "temporal/**",
+    "receiver/**",
+    "cli/**",
+    "scripts/**",
+    "crypto_utils.py",
+    "config_store.py",
+]

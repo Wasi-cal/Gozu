@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 
 from temporalio.client import Client
 from temporalio.worker import Worker
@@ -16,7 +17,8 @@ from temporal.workflows.scan_to_ticket import ScanToTicketWorkflow
 async def main():
     logging.basicConfig(level=logging.INFO)
 
-    client = await Client.connect("localhost:7233", data_converter=DATA_CONVERTER)
+    temporal_host = os.environ.get("TEMPORAL_HOST", "localhost:7233")
+    client = await Client.connect(temporal_host, data_converter=DATA_CONVERTER)
 
     worker = Worker(
         client,
