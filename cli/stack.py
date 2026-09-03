@@ -10,7 +10,7 @@ import subprocess
 
 import typer
 
-import config_store
+import config.store as config_store
 
 # Fixed inside the Docker network (docker-compose.yml's receiver service
 # always listens on 5000 internally) - RECEIVER_PORT (.env) is only the

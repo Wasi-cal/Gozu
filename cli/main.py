@@ -20,7 +20,7 @@ app = typer.Typer(
 def _load_env() -> None:
     """
     Load .env (if it exists yet) into this process's environment before any
-    command runs - config_store and friends read POSTGRES_HOST etc from
+    command runs - config.store and friends read POSTGRES_HOST etc from
     os.environ, which a `source .env` in the shell normally provides, but
     codescan can't assume the caller did that.
     """

@@ -5,7 +5,7 @@ import subprocess
 from temporalio import activity
 
 from core.models import Finding
-from scanner.client import build_scanner_client, get_scanner_client
+from scanner.factory import build_scanner_client, get_scanner_client
 from temporal.models.fetch_findings import FetchFindingsInput
 
 

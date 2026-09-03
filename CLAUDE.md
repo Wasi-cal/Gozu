@@ -16,7 +16,9 @@ actually running a scan) is open to work on.
 ## CLI conventions (Phase 2+)
 
 - The `cli/` package holds everything CLI-specific: `main.py` (the typer
-  app), `init_wizard.py`, `prerequisites.py`, `help_links.py`.
+  app), `init_wizard/`, `scan_runner/`, `prerequisites/` (each a small
+  package, one file per step/concern - see their own docstrings), plus
+  `help_links.py` and `stack.py`.
 - Every interactive select/confirm prompt uses **questionary** (arrow-key
   menus), not typed option strings or plain `input()` - this is a fixed
   choice for this project, not a per-prompt toss-up, given how many
@@ -35,7 +37,7 @@ actually running a scan) is open to work on.
 ## Naming: "configs", not "profiles"
 
 A saved, named set of scanner + ticket-backend credentials (see
-`sql/init.sql`'s `configs` table, `config_store.py`) is called a **config**,
+`sql/init.sql`'s `configs` table, `config/store.py`) is called a **config**,
 never a "profile". Docker Compose already has an unrelated built-in concept
 called profiles (`docker-compose.yml`'s `profiles: [...]` on the
 `sonarqube` service, for conditionally starting services) - reusing "profile"
@@ -63,7 +65,7 @@ Use **exactly one** logging mechanism inside the Temporal-executed pipeline:
 - `activity.logger` (from `temporalio.activity`) everywhere else that runs
   inside an activity - the activity functions themselves
   (`temporal/activities/`) and every module they call into
-  (`scanner/client.py`, `scanner/screenshot.py`, `ticket/client.py`).
+  (`scanner/`, `ticket/`).
 
 Both are Temporal's contextual loggers - they tag every line with
 workflow/activity id, run id, attempt number, etc, and route to the same
@@ -88,21 +90,22 @@ wait for a third copy. Concretely, follow the patterns already in this
 codebase rather than inventing new ones:
 
 - **Pure-builder + env-reading-wrapper split**, for anything that can be
-  configured either explicitly or from the environment: `scanner/client.py`'s
+  configured either explicitly or from the environment: `scanner/factory.py`'s
   `build_scanner_client(scanner_type, scanner_mode, credentials)` (no env
   reads) vs `get_scanner_client()` (reads env vars, delegates to the
-  builder); `ticket/client.py`'s `build_ticket_client()`/`get_ticket_client()`
+  builder); `ticket/factory.py`'s `build_ticket_client()`/`get_ticket_client()`
   mirror it. When adding a new backend or a new per-config code path, add
   to the pure builder and let the env-reading wrapper stay a thin
   translation layer - don't duplicate the branching in both.
 - **Extract shared download/verify logic**, not per-tool copies: see
-  `cli/prerequisites.py`'s `_download_archive()`/`_extract_archive()`/
-  `_make_tree_executable()`/`_verify_runnable()`, shared by `ensure_java()`
-  and `ensure_sonar_scanner()`. A third `ensure_*()` for a new host
-  dependency should reuse these, not reimplement its own download loop.
-  Same idea for small derived values used in more than one place - e.g.
-  `cli/scan_runner.py`'s `_scanner_host_url(config)`, computed once and
-  reused rather than recomputed per call site.
+  `cli/prerequisites/archive.py`'s `download_archive()`/`extract_archive()`/
+  `make_tree_executable()`/`verify_runnable()`, shared by `java.py`'s
+  `ensure_java()` and `sonar_scanner.py`'s `ensure_sonar_scanner()`. A third
+  `ensure_*()` for a new host dependency should reuse these, not reimplement
+  its own download loop. Same idea for small derived values used in more
+  than one place - e.g. `cli/scan_runner/config_fields.py`'s
+  `scanner_host_url(config)`, computed once and reused rather than
+  recomputed per call site.
 - **Dedicated, narrow Pydantic models per activity boundary** (interface
   segregation) rather than one bloated shared input model: `fetch_findings_activity`
   takes `FetchFindingsInput`, `create_tickets_activity` takes

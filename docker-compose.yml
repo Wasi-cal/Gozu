@@ -76,7 +76,7 @@ services:
   receiver:
     build: .
     # Reuses the worker's image/Dockerfile - same dependencies already
-    # cover Flask/config_store/the Temporal client, so there's nothing
+    # cover Flask/config.store/the Temporal client, so there's nothing
     # receiver-specific to install; just run a different module.
     command: ["python", "-m", "receiver.app"]
     profiles: ["webhook"]

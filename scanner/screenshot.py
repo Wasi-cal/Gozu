@@ -33,7 +33,7 @@ from pydantic import BaseModel
 from temporalio import activity
 
 from core.models import Finding
-from scanner.client import resolve_container_host
+from scanner.base import resolve_container_host
 
 _SOURCE_VIEWER_SELECTORS = [
     "table",

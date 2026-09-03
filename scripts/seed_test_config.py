@@ -7,7 +7,7 @@ Inserts one dummy config via config_store.create_config(), reads it back via
 config_store.get_config(), and confirms every decrypted credential
 round-trips back to exactly what was written - proving the
 encrypt-on-write/decrypt-on-read path actually works end to end against a
-real Postgres instance, not just crypto_utils in isolation.
+real Postgres instance, not just config.crypto in isolation.
 
 Cleans up the row it creates so re-running this script stays idempotent.
 """
@@ -15,7 +15,7 @@ Cleans up the row it creates so re-running this script stays idempotent.
 import sys
 import uuid
 
-import config_store
+import config.store as config_store
 
 CONFIG_FIELDS = {
     "scanner_type": "sonarqube",
