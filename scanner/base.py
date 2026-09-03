@@ -52,11 +52,6 @@ SONAR_SEVERITY_MAP = {
 }
 DEFAULT_SEVERITY = Severity.MEDIUM
 
-TYPE_LABELS = {
-    "vulnerability": "Vulnerability",
-    "hotspot": "Hotspot",
-}
-
 # scanner_type -> display name. The single source of truth for "which
 # scanners exist" - the init wizard's scanner-selection prompt reads this
 # instead of hardcoding "sonarqube" as a magic string, so registering a
