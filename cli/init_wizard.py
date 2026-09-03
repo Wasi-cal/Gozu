@@ -21,9 +21,12 @@ from cli.help_links import print_help_link
 from cli.prerequisites import ensure_java
 from scanner.client import SCANNER_REGISTRY
 from scripts.bootstrap_env import (
+    DEFAULT_PORTS,
+    ENV_PATH,
     FernetKeySafetyError,
     bootstrap_env,
     load_into_environ,
+    parse_env_file,
     resolve_ports,
 )
 
@@ -45,7 +48,14 @@ def _prompt_text(label: str, field: str | None = None, default: str = "") -> str
 def _step_bootstrap_env() -> None:
     typer.secho("Step 1/4: environment (.env)", bold=True)
 
-    ports = resolve_ports()
+    # Prefer whatever's already in .env for a port that's already set - a
+    # fresh probe would see it as "taken" once the service it belongs to
+    # (e.g. SonarQube itself) is actually running on it, and wrongly
+    # suggest the next free port instead of the correct, already-working one.
+    existing = parse_env_file(ENV_PATH)
+    probed = resolve_ports()
+    ports = {name: int(existing[name]) if name in existing else probed[name] for name in DEFAULT_PORTS}
+
     typer.echo("Ports that will be used (auto-detected as free - override any of them below):")
     overrides: dict[str, int] = {}
     for name, port in ports.items():
