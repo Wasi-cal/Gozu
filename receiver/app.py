@@ -10,11 +10,12 @@ SonarQube's server-side processing finished; that's what it's signaling.
 """
 
 import asyncio
+import fnmatch
 import logging
 
 from flask import Flask, jsonify, request
 
-import config_store
+import config.store as config_store
 from receiver.starter import start_scan_to_ticket_workflow
 from receiver.verify_signature import verify_signature
 
@@ -91,6 +92,21 @@ def sonarqube_webhook(config_name: str):
         return jsonify({"error": "missing taskId in payload"}), 400
 
     branch = payload.get("branch", {}).get("name")
+
+    # No fan-out logic needed here (unlike direct invocation's
+    # MultiBranchScanWorkflow) - SonarQube already delivers one webhook per
+    # branch, so a multi-branch config's `branches` list just gates which
+    # of those deliveries proceed. Null/empty branches means "no
+    # restriction" (matches config/store.py/cli/scan_runner/).
+    config_branches = config.get("branches")
+    if config_branches:
+        patterns = [b.strip() for b in config_branches.split(",") if b.strip()]
+        if not any(fnmatch.fnmatch(branch or "", pattern) for pattern in patterns):
+            logger.info(
+                f"Skipping webhook for '{config_name}': branch {branch!r} doesn't match "
+                f"tracked branches {patterns}"
+            )
+            return jsonify({"status": "ignored", "reason": f"branch {branch!r} not tracked"}), 200
 
     logger.info(f"Verified webhook for config='{config_name}' project_key={payload_project_key} task_id={task_id}")
 
