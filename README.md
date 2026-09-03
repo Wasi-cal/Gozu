@@ -583,6 +583,113 @@ workflow gets triggered. To confirm:
    matching step 1's `created` count, and that Jira still shows exactly
    one ticket per finding (no duplicates).
 
+## Phase 4: Webhook Mode
+
+Phase 4 adds the other trigger mode: SonarQube itself (running its own
+scan - not triggered by `codescan run` at all) POSTs to a persistent
+receiver, which resolves the right config and triggers the workflow, with
+no human or CLI involvement once it's set up.
+
+**What got added:**
+
+- **`receiver/app.py`** rewritten for multi-config routing:
+  `POST /webhooks/sonarqube/<config_name>` loads that config
+  (`config_store.get_config()`, 404 if it doesn't exist), verifies
+  `X-Sonar-Webhook-HMAC-SHA256` against *that config's own*
+  `webhook_secret` (500 with a clear message pointing at `codescan up` if
+  it doesn't have one), ignores anything with `status != "SUCCESS"`,
+  and - specifically to catch a webhook pointed at the wrong config's URL -
+  rejects (400) if the payload's `project.key` doesn't match the config's
+  `project_key`. No SonarQube `ce/task` polling here, unlike direct
+  invocation: the webhook firing at all already means SonarQube's
+  server-side processing is done. Starts `ScanToTicketWorkflow`
+  (fire-and-forget, workflow ID `sonar-jira-{taskId}` - same deterministic-ID
+  idempotency as direct invocation) and returns 200 immediately, without
+  waiting for it to finish.
+- **`config_store.set_credential(name, key, value)`** - insert-or-update a
+  single credential on an existing config. Not a general config-editing
+  API; specifically what `codescan up` uses to persist a generated
+  `webhook_secret` onto a config that predates one.
+- **`docker-compose.yml`**'s `receiver` service - reuses the worker's
+  image (same dependencies already cover Flask/config_store/the Temporal
+  client; only the run command differs: `python -m receiver.app`),
+  gated behind the `webhook` profile, with its own healthcheck (`/health`).
+- **`codescan up`** (`cli/stack.py`): reads every config, determines which
+  Compose profiles are actually needed (`sonarqube-local` if any config
+  is `scanner_mode=local`; `webhook` if any config is `trigger_mode=webhook`),
+  generates and persists a `webhook_secret` for any webhook-mode config
+  missing one (printed once, never shown again), runs
+  `docker compose --profile ... up -d` with exactly those profiles, prints
+  `docker compose ps`, and - for every webhook-mode config - prints the
+  exact URL to configure in SonarQube:
+  `http://receiver:5000/webhooks/sonarqube/{config_name}` (the Docker
+  network's internal address/port - always 5000 there regardless of
+  whatever `RECEIVER_PORT` the host-side mapping resolved to). A Cloud +
+  webhook config gets a note instead that this URL only resolves inside
+  the Docker network - reaching it from SonarQube Cloud needs an external
+  tunnel/deploy, which `codescan` doesn't set up automatically.
+- **`codescan down`**: `docker compose stop` - containers stop, volumes/data
+  persist. No destructive `--wipe` option in this phase.
+
+### Running it
+
+```bash
+codescan up
+```
+
+Prints something like:
+
+```
+Running: docker compose --profile sonarqube-local --profile webhook up -d
+...
+Status:
+NAME                       ...  STATUS
+sonar-to-jira-receiver-1   ...  Up (healthy)
+sonar-to-jira-sonarqube-1  ...  Up (healthy)
+...
+
+Configure this webhook URL in SonarQube for 'test1': http://receiver:5000/webhooks/sonarqube/test1
+```
+
+In SonarQube: **Administration -> Webhooks** (or per-project) -> add a
+webhook with that URL and the printed secret (or, via the API, the same
+way step 4 of the manual setup further down this README does it - see
+`api/webhooks/create`).
+
+Then trigger a real scan **without** `codescan run` at all - directly via
+`sonar-scanner`:
+
+```bash
+sonar-scanner -Dsonar.host.url=http://localhost:<SONARQUBE_PORT> \
+  -Dsonar.token=<a-real-token> -Dsonar.projectKey=<the config's project_key> \
+  -Dsonar.sources=.
+```
+
+SonarQube processes the analysis and fires the webhook on its own -
+`docker compose logs receiver` should show `Verified webhook for
+config='test1' ...` -> `Started workflow sonar-jira-<taskId>` with no
+`codescan` process involved anywhere in that chain. Check
+`docker compose logs worker` or Temporal's Web UI
+(`http://localhost:<TEMPORAL_UI_PORT>`) for the workflow's result, and
+Jira for the new ticket(s).
+
+```bash
+codescan down
+```
+
+Stops the stack (data persists in the named volumes).
+
+**A real gap found live while building this, worth knowing about:**
+SonarQube's issues/hotspots search index can lag a few seconds behind a
+compute-engine task's own `SUCCESS` status - querying it too soon returns
+the same `404 "Project not found"` a genuinely permanent problem (e.g. a
+project that really doesn't exist) would. `fetch_findings_activity`'s
+retry policy (`temporal/workflows/scan_to_ticket.py`) is tuned
+accordingly - `maximum_attempts=8` with a `2s` initial backoff, more
+patient than `create_tickets_activity`'s `maximum_attempts=3` (Jira
+errors like an invalid project are reliably permanent, not an indexing
+race, so failing fast there is correct).
+
 ## Prerequisites
 
 - Docker (for SonarQube Community Build)

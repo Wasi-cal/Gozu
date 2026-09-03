@@ -73,6 +73,35 @@ services:
       postgres:
         condition: service_healthy
 
+  receiver:
+    build: .
+    # Reuses the worker's image/Dockerfile - same dependencies already
+    # cover Flask/config_store/the Temporal client, so there's nothing
+    # receiver-specific to install; just run a different module.
+    command: ["python", "-m", "receiver.app"]
+    profiles: ["webhook"]
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${RECEIVER_PORT:-5000}:5000"
+    environment:
+      TEMPORAL_HOST: temporal:7233
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      temporal:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   sonarqube_data:

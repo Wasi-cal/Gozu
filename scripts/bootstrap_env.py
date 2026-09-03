@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Generates/merges .env: a random Postgres password, a fresh Fernet key, and
-free host ports for Postgres/SonarQube/Temporal/Temporal's web UI. Run once
+free host ports for Postgres/SonarQube/Temporal/Temporal's web UI/the
+webhook receiver. Run once
 per machine/checkout, before `docker compose up` - and safe to re-run any
 time, since it only ever fills in fields that are still missing.
 
@@ -34,13 +35,13 @@ from cryptography.fernet import Fernet
 
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
-# Host-side default ports. The receiver's port (5000) isn't included here -
-# it belongs to a later phase.
+# Host-side default ports.
 DEFAULT_PORTS: dict[str, int] = {
     "POSTGRES_PORT": 5432,
     "SONARQUBE_PORT": 9000,
     "TEMPORAL_PORT": 7233,
     "TEMPORAL_UI_PORT": 8233,
+    "RECEIVER_PORT": 5000,
 }
 
 

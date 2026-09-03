@@ -38,7 +38,15 @@ class ScanToTicketWorkflow:
                 branch=input.branch,
             ),
             start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=RetryPolicy(maximum_attempts=3),
+            # SonarQube's issues/hotspots search index can lag a few seconds
+            # behind a compute-engine task's own SUCCESS status - a project
+            # genuinely not existing (a permanent error, what
+            # maximum_attempts is mainly guarding against - see
+            # create_tickets_activity below) looks identical over the API to
+            # "not indexed yet" (both 404 "Project not found"). More
+            # attempts + a longer initial backoff than the default gives
+            # that indexing lag room to resolve before giving up for real.
+            retry_policy=RetryPolicy(initial_interval=timedelta(seconds=2), maximum_attempts=8),
         )
 
         workflow.logger.info(
