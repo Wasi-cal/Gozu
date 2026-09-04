@@ -32,12 +32,12 @@ def _build_scanner_command(config: dict, path: str, branch: str | None) -> list[
         # sonar.branch.name is a Developer Edition+ feature on self-hosted
         # SonarQube (Community Build rejects it outright - confirmed live:
         # "Validation of project failed: ... Developer Edition or above is
-        # required"), but SonarQube Cloud supports it on every plan
-        # including Free. Only tagging it here for cloud keeps the scan's
-        # own recorded branch consistent with what fetch_findings() later
-        # queries by (scanner/sonarqube_common.py) - untagged, Community
-        # Build always stores everything under its own hardcoded "main"
-        # regardless of what's actually checked out on the host.
+        # required"). The caller (cli/scan_runner/__init__.py) only ever
+        # passes a real `branch` here for Premium configs - Free will
+        # happily tag a scan with any branch name, but then rejects
+        # *querying* anything but "main" at the API level ("Organization is
+        # not allowed to access data from non main branches" - confirmed
+        # live), so Free is kept untagged/unscoped just like Local.
         if branch:
             command.append(f"-Dsonar.branch.name={branch}")
     return command

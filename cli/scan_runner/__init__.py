@@ -32,12 +32,14 @@ def run_scan_cycle(config: dict, path: str) -> dict:
     ensure_java()
     ensure_sonar_scanner()
 
-    # Only tag/query by branch for Cloud - self-hosted Community Build
-    # rejects sonar.branch.name outright (a Developer Edition+ feature),
-    # and untagged, it always stores analysis under its own hardcoded
-    # "main" regardless of what's checked out here. See scanner_exec.py's
-    # _build_scanner_command().
-    branch = detect_git_branch(path) if config["scanner_mode"] == "cloud" else None
+    # Only tag/query by branch for Premium - self-hosted Community Build
+    # rejects sonar.branch.name outright (a Developer Edition+ feature), and
+    # Free rejects querying anything but "main" at the API level ("Organization
+    # is not allowed to access data from non main branches" - confirmed live)
+    # even though it'll happily tag a scan with any branch name. Both
+    # untagged/unscoped, a scan+fetch just uses whatever each backend treats
+    # as its one implicit branch - see scanner_exec.py's _build_scanner_command().
+    branch = detect_git_branch(path) if config.get("sonar_plan") == "premium" else None
 
     typer.echo(f"Running sonar-scanner against {path} ...")
     run_scanner(config, path, branch)
