@@ -75,12 +75,20 @@ class ScannerRequirements(BaseModel):
 
 class ScannerClient(ABC):
     @abstractmethod
-    def fetch_findings(self, project_key: str) -> list[Finding]:
+    def fetch_findings(self, project_key: str, branch: str | None = None) -> list[Finding]:
         """
         Return every open finding (vulnerabilities, hotspots, or whatever
         categories this tool has) for a project, in normalized form.
         Combining multiple upstream categories into one list is an internal
         detail of each adapter, not part of the generic contract.
+
+        `branch` scopes the query to a specific branch's analysis where the
+        backend actually supports that (SonarQube Cloud, on every plan). A
+        backend that doesn't distinguish branches (self-hosted Community
+        Build, which only ever has one implicit analysis to begin with) is
+        expected to pass it straight through to its query rather than
+        special-case it away - a real mismatch should come back as "no
+        findings", not be silently papered over.
         """
         raise NotImplementedError
 

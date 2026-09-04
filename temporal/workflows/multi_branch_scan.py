@@ -9,13 +9,16 @@ receiver/app.py's branch-pattern check instead, which just gates which of
 those per-branch deliveries proceed). This only matters for direct
 invocation, where a single sonar-scanner run (and therefore a single
 ceTaskId) covers whatever's actually checked out on the host - fanning
-out here means running the same fetched findings through the ticket
-pipeline once per tracked branch (each child gets its own workflow_id and
-stamps its own `branch` label on the resulting Finding objects), not
-re-scanning per branch. Since all children share the same findings,
-dedupe (source-key-{finding_key}) means only the first child to reach a
-given finding actually creates its ticket - later children correctly see
-it as already-ticketed and skip it, exactly like a normal rescan would.
+out here means each child independently fetches ITS OWN branch's findings
+(fetch_findings_activity passes each child's `branch` through to the
+scanner's query - see scanner/sonarqube_common.py), not re-running
+sonar-scanner per branch. For a scanner that actually distinguishes
+branches (SonarQube Cloud), children genuinely see different findings.
+For one that doesn't (self-hosted Community Build), every child queries
+the same underlying data, so dedupe (source-key-{finding_key}) is what
+keeps that case from creating duplicate tickets - only the first child to
+reach a given finding creates it, later children see it as
+already-ticketed.
 """
 
 import asyncio

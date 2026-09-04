@@ -14,7 +14,7 @@ _POLL_TIMEOUT_SECONDS = 300
 _TERMINAL_TASK_STATUSES = {"SUCCESS", "FAILED", "CANCELED"}
 
 
-def _build_scanner_command(config: dict, path: str) -> list[str]:
+def _build_scanner_command(config: dict, path: str, branch: str | None) -> list[str]:
     scanner_bin = ensure_sonar_scanner()
     credentials = config["credentials"]
     project_key = require_project_key(config)
@@ -29,11 +29,22 @@ def _build_scanner_command(config: dict, path: str) -> list[str]:
     ]
     if config["scanner_mode"] == "cloud":
         command.append(f"-Dsonar.organization={credentials['sonar_organization']}")
+        # sonar.branch.name is a Developer Edition+ feature on self-hosted
+        # SonarQube (Community Build rejects it outright - confirmed live:
+        # "Validation of project failed: ... Developer Edition or above is
+        # required"), but SonarQube Cloud supports it on every plan
+        # including Free. Only tagging it here for cloud keeps the scan's
+        # own recorded branch consistent with what fetch_findings() later
+        # queries by (scanner/sonarqube_common.py) - untagged, Community
+        # Build always stores everything under its own hardcoded "main"
+        # regardless of what's actually checked out on the host.
+        if branch:
+            command.append(f"-Dsonar.branch.name={branch}")
     return command
 
 
-def run_scanner(config: dict, path: str) -> None:
-    command = _build_scanner_command(config, path)
+def run_scanner(config: dict, path: str, branch: str | None) -> None:
+    command = _build_scanner_command(config, path, branch)
     result = subprocess.run(command, cwd=path, capture_output=True, text=True, env=java_env(), check=False)
     if result.returncode != 0:
         raise RuntimeError(
