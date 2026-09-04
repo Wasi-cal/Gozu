@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 """gozu CLI entrypoint (see pyproject.toml's [project.scripts])."""
 
 import time
@@ -80,9 +84,13 @@ def up() -> None:
 
 
 @app.command()
-def down() -> None:
-    """Stop the local infrastructure stack (containers stop; volumes/data persist)."""
-    stack_down()
+def down(
+    wipe: bool = typer.Option(
+        False, "--wipe", help="Also permanently delete configs/ticket destinations/dedupe claims and volumes."
+    ),
+) -> None:
+    """Stop the local infrastructure stack (containers stop; volumes/data persist, unless --wipe)."""
+    stack_down(wipe)
 
 
 if __name__ == "__main__":
