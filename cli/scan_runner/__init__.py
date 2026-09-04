@@ -32,8 +32,15 @@ def run_scan_cycle(config: dict, path: str) -> dict:
     ensure_java()
     ensure_sonar_scanner()
 
+    # Only tag/query by branch for Cloud - self-hosted Community Build
+    # rejects sonar.branch.name outright (a Developer Edition+ feature),
+    # and untagged, it always stores analysis under its own hardcoded
+    # "main" regardless of what's checked out here. See scanner_exec.py's
+    # _build_scanner_command().
+    branch = detect_git_branch(path) if config["scanner_mode"] == "cloud" else None
+
     typer.echo(f"Running sonar-scanner against {path} ...")
-    run_scanner(config, path)
+    run_scanner(config, path, branch)
 
     ce_task_id = read_ce_task_id(path)
     typer.echo(f"sonar-scanner finished; waiting for SonarQube analysis task {ce_task_id} ...")
@@ -41,7 +48,6 @@ def run_scan_cycle(config: dict, path: str) -> dict:
     wait_for_analysis(scanner_host_url(config), config["credentials"]["sonar_token"], ce_task_id)
     typer.echo("Analysis finished - triggering ScanToTicketWorkflow ...")
 
-    branch = detect_git_branch(path)
     ticket_result = asyncio.run(trigger_workflow(config, ce_task_id, branch))
 
     return {

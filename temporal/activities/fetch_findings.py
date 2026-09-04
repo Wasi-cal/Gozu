@@ -38,9 +38,9 @@ async def fetch_findings_activity(input: FetchFindingsInput) -> list[Finding]:
         if input.credentials
         else get_scanner_client()
     )
-    findings = client.fetch_findings(input.project_key)
-
     branch = input.branch if input.branch is not None else _get_git_branch()
+    findings = client.fetch_findings(input.project_key, branch=branch)
+
     for finding in findings:
         finding.branch = branch
 
