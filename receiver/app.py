@@ -61,7 +61,7 @@ def sonarqube_webhook(config_name: str):
     if not webhook_secret:
         logger.error(f"Config '{config_name}' has no webhook_secret configured")
         return jsonify({
-            "error": f"config '{config_name}' has no webhook_secret - run `codescan up` to generate one",
+            "error": f"config '{config_name}' has no webhook_secret - run `gozu up` to generate one",
         }), 500
 
     signature = request.headers.get("X-Sonar-Webhook-HMAC-SHA256", "")

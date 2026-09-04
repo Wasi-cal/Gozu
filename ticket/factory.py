@@ -13,7 +13,7 @@ def build_ticket_client(ticket_backend: str, credentials: dict[str, str]) -> Tic
     """
     Pure constructor: build a TicketClient from explicit params, no env
     reads. This is what a specific config's credentials (config.store.
-    get_config(), as used by `codescan run`) go through; get_ticket_client()
+    get_config(), as used by `gozu run`) go through; get_ticket_client()
     below is a thin env-reading wrapper around this for the legacy
     single-global-config path (the webhook receiver).
     """

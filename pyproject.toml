@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "codescan"
+name = "gozu"
 version = "0.1.0"
 description = "Scan code with SonarQube and auto-create Jira tickets for vulnerabilities, orchestrated with Temporal."
 requires-python = ">=3.12"
@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.scripts]
-codescan = "cli.main:app"
+gozu = "cli.main:app"
 
 [tool.hatch.build.targets.wheel]
 include = [

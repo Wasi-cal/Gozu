@@ -27,9 +27,9 @@ def print_summary(
 
     if sonar_plan == "free":
         typer.secho(
-            f"\nThis config needs `codescan run --config {name} --watch` running to actually do anything - "
+            f"\nThis config needs `gozu run --config {name} --watch` running to actually do anything - "
             "Free plan has no push-based mechanism, so nothing happens automatically on its own.",
             fg=typer.colors.YELLOW,
         )
     else:
-        typer.echo(f"\n`codescan run --config {name}` will use this config.")
+        typer.echo(f"\n`gozu run --config {name}` will use this config.")

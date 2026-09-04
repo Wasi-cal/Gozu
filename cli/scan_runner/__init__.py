@@ -1,5 +1,5 @@
 """
-`codescan run`'s actual logic: pick a config, run sonar-scanner, wait for
+`gozu run`'s actual logic: pick a config, run sonar-scanner, wait for
 SonarQube's server-side processing to finish, then trigger the Temporal
 workflow directly - no webhook involved.
 """

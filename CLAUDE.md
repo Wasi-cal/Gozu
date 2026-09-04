@@ -2,15 +2,16 @@
 
 ## The product
 
-This repo is being built into a commercial CLI tool - working name
-`codescan` (placeholder; use it consistently: the command is `codescan`,
-host-side dirs like `~/.codescan/`). The repo/working directory stays
-`sonar-to-jira` until a real name is picked - don't rename it preemptively.
+This repo is being built into a commercial CLI tool called **Gozu** (the
+name is decided, not a placeholder - use it consistently: the command is
+`gozu`, host-side dirs like `~/.gozu/`). The repo/working directory stays
+`sonar-to-jira` for now - don't rename it without checking first, since
+that's a separate decision from the product's own name.
 It lets users scan code with SonarQube and auto-create Jira tickets for
 vulnerabilities, orchestrated with Temporal. The build is happening in
 phases (Phase 1: Docker Compose infra + encrypted config store. Phase 2:
-`codescan init`, the setup wizard - see README.md for both); check with
-the user before assuming a later phase's scope (e.g. `codescan run`,
+`gozu init`, the setup wizard - see README.md for both); check with
+the user before assuming a later phase's scope (e.g. `gozu run`,
 actually running a scan) is open to work on.
 
 ## CLI conventions (Phase 2+)

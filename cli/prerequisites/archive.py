@@ -13,7 +13,7 @@ from pathlib import Path
 
 import requests
 
-CODESCAN_HOME = Path.home() / ".codescan"
+GOZU_HOME = Path.home() / ".gozu"
 
 
 def os_name(labels: dict[str, str]) -> str:

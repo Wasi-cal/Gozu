@@ -8,7 +8,7 @@ class SonarToJiraInput(BaseModel):
     task_id: str | None = None
 
     # A specific config's scanner/ticket backend + credentials, as selected
-    # by `codescan run` (cli/scan_runner/) - config.store.get_config()'s
+    # by `gozu run` (cli/scan_runner/) - config.store.get_config()'s
     # scanner_type/scanner_mode/ticket_backend/credentials shape, passed
     # straight through. All default to the legacy single-global-config
     # values so the webhook receiver (receiver/starter.py), which has no

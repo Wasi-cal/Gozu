@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 
 from cli.prerequisites.archive import (
-    CODESCAN_HOME,
+    GOZU_HOME,
     arch_name,
     download_archive,
     extract_archive,
@@ -18,7 +18,7 @@ from cli.prerequisites.archive import (
 )
 from cli.prerequisites.java import java_env
 
-SONAR_SCANNER_DIR = CODESCAN_HOME / "sonar-scanner"
+SONAR_SCANNER_DIR = GOZU_HOME / "sonar-scanner"
 
 # Sonar doesn't publish a "latest" alias for sonar-scanner-cli downloads (the
 # distribution bucket has no directory listing), so this is pinned to a
@@ -28,7 +28,7 @@ _SONAR_SCANNER_VERSION = "8.1.0.6389"
 
 
 def _managed_sonar_scanner_binary() -> Path | None:
-    """The sonar-scanner binary inside our own ~/.codescan/sonar-scanner/, if we've downloaded one before."""
+    """The sonar-scanner binary inside our own ~/.gozu/sonar-scanner/, if we've downloaded one before."""
     if not SONAR_SCANNER_DIR.is_dir():
         return None
 
@@ -43,7 +43,7 @@ def _managed_sonar_scanner_binary() -> Path | None:
 def check_sonar_scanner() -> bool:
     """
     True if a working sonar-scanner is found either on PATH or in our own
-    ~/.codescan/sonar-scanner/ (checking both here, unlike check_java(),
+    ~/.gozu/sonar-scanner/ (checking both here, unlike check_java(),
     since ensure_sonar_scanner() relies on this one function to know about
     a previously-managed download instead of layering that check itself).
     """
@@ -63,7 +63,7 @@ def ensure_sonar_scanner() -> Path:
     needed - same fully-contained-directory approach as ensure_java(): if
     check_sonar_scanner() finds a working one already (PATH or a previous
     managed download), use it; otherwise download the official sonar-scanner
-    CLI distribution for this host's OS/arch into ~/.codescan/sonar-scanner/
+    CLI distribution for this host's OS/arch into ~/.gozu/sonar-scanner/
     (no system-wide install) and confirm it's runnable afterward.
     """
     if check_sonar_scanner():
