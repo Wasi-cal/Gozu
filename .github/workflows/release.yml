@@ -1,0 +1,55 @@
+name: Release
+
+# Triggered by pushing a version tag, e.g.:
+#   git tag v0.1.0 && git push origin v0.1.0
+# The tag (minus its leading "v") must match pyproject.toml's [project]
+# version exactly - the version-check step below fails fast if they drift,
+# rather than silently publishing a release with the wrong version string.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Check tag matches pyproject.toml version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          pkg_version="$(uv run python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME (version $tag_version) doesn't match pyproject.toml's version $pkg_version"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run tests
+        run: uv run pytest -v
+
+      - name: Build wheel and sdist
+        run: uv build
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes

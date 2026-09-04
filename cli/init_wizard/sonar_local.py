@@ -10,7 +10,7 @@ from cli.init_wizard.prompts import ask_or_exit, generate_or_prompt_secret, prom
 
 def prompt_project_key() -> str:
     """
-    Required for every new config: `codescan run` needs it for both the
+    Required for every new config: `gozu run` needs it for both the
     sonar-scanner command and the issues-fetch API call, and unlike the old
     webhook path there's no incoming payload to pull it from anymore.
     """

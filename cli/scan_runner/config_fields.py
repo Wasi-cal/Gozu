@@ -11,7 +11,7 @@ def require_project_key(config: dict) -> str:
     if not project_key:
         raise RuntimeError(
             f"Config '{config['name']}' has no project_key (it predates that field) - "
-            "recreate it with `codescan init` before running a scan."
+            "recreate it with `gozu init` before running a scan."
         )
     return project_key
 

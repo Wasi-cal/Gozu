@@ -1,5 +1,5 @@
 """
-`codescan init` - the interactive setup wizard. Provisions .env, checks/
+`gozu init` - the interactive setup wizard. Provisions .env, checks/
 installs prerequisites, walks through scanner + ticket credential
 selection, and seeds one row via config.store.create_config(). Ends at "a
 named config exists in Postgres" - actually running a scan is
@@ -48,7 +48,7 @@ def _prompt_config_name() -> str:
 
 
 def run_init_wizard() -> None:
-    typer.secho("codescan init", bold=True, underline=True)
+    typer.secho("gozu init", bold=True, underline=True)
 
     step_bootstrap_env()
     step_ensure_java()

@@ -11,7 +11,7 @@ def build_scanner_client(scanner_type: str, scanner_mode: str, credentials: dict
     """
     Pure constructor: build a ScannerClient from explicit params, no env
     reads. This is what a specific config's credentials (config.store.
-    get_config(), as used by `codescan run`) go through; get_scanner_client()
+    get_config(), as used by `gozu run`) go through; get_scanner_client()
     below is a thin env-reading wrapper around this for the legacy
     single-global-config path (the webhook receiver).
     """

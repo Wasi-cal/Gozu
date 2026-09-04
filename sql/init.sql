@@ -36,10 +36,10 @@ CREATE TABLE IF NOT EXISTS configs (
 -- existing table, so this is what actually adds the column to it. Nullable
 -- at the DB level so pre-existing configs aren't broken by a NOT NULL
 -- constraint; the CLI wizard still treats it as a required prompt for any
--- new config (see cli/init_wizard.py) - `codescan run` needs it (no more
+-- new config (see cli/init_wizard.py) - `gozu run` needs it (no more
 -- webhook payload to pull it from), so a config created before this
--- migration must be recreated via `codescan init` before it can be used
--- with `codescan run`.
+-- migration must be recreated via `gozu init` before it can be used
+-- with `gozu run`.
 ALTER TABLE configs ADD COLUMN IF NOT EXISTS project_key TEXT;
 
 -- Phase 5 migration, same reasoning as project_key above: nullable so a

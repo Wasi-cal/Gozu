@@ -1,4 +1,4 @@
-# codescan
+# gozu
 
 Scans your code with SonarQube and automatically creates Jira tickets for
 vulnerabilities/hotspots it finds - orchestrated with [Temporal](https://temporal.io)
@@ -9,7 +9,7 @@ Working name for the CLI/product; the repo directory is still called
 
 ## What happens on a scan
 
-1. Code gets scanned (either you run `codescan run`, or SonarQube fires a webhook after its own analysis).
+1. Code gets scanned (either you run `gozu run`, or SonarQube fires a webhook after its own analysis).
 2. A Temporal workflow fetches open findings from SonarQube.
 3. For each finding without an existing ticket (deduped by a Jira label), a ticket is created and dropped into the project's active sprint.
 4. A screenshot of the flagged code in the SonarQube UI is captured and attached to the new ticket, along with an extracted code snippet as a comment.
@@ -22,27 +22,27 @@ to be real (Cloud or self-hosted).
 
 ```bash
 uv sync                    # install dependencies
-uv run codescan init       # interactive wizard: .env, prerequisites, scanner + Jira credentials
-codescan up                # bring up Postgres/Temporal (+ SonarQube/receiver if a config needs them)
-codescan run                # scan once and create tickets
+uv run gozu init       # interactive wizard: .env, prerequisites, scanner + Jira credentials
+gozu up                # bring up Postgres/Temporal (+ SonarQube/receiver if a config needs them)
+gozu run                # scan once and create tickets
 ```
 
-`codescan init` walks you through everything - it writes `.env`, checks for
-Java/sonar-scanner (downloading portable copies into `~/.codescan/` if
+`gozu init` walks you through everything - it writes `.env`, checks for
+Java/sonar-scanner (downloading portable copies into `~/.gozu/` if
 missing), and saves your scanner + Jira credentials as a named **config**
 in Postgres (encrypted at rest). Run it again to add more configs.
 
 ## How a scan gets triggered
 
-Three ways, chosen per-config during `codescan init`:
+Three ways, chosen per-config during `gozu init`:
 
 | Mode | When it's used | How it works |
 |---|---|---|
-| `direct` | Self-hosted SonarQube, run on demand | `codescan run` runs sonar-scanner, waits for SonarQube to finish, then creates tickets |
-| `watch` | SonarQube Cloud **Free** plan | Free only analyzes PRs after merge to main - there's no webhook to receive, so `codescan run --watch` polls on an interval instead |
+| `direct` | Self-hosted SonarQube, run on demand | `gozu run` runs sonar-scanner, waits for SonarQube to finish, then creates tickets |
+| `watch` | SonarQube Cloud **Free** plan | Free only analyzes PRs after merge to main - there's no webhook to receive, so `gozu run --watch` polls on an interval instead |
 | `webhook` | Self-hosted SonarQube, or SonarQube Cloud **Premium** | SonarQube calls `receiver/app.py` as soon as its own analysis finishes; Premium can track several branches (with pattern support, e.g. `release/*`), each webhook gated against that list |
 
-A Premium config tracking more than one branch fans out: `codescan run`
+A Premium config tracking more than one branch fans out: `gozu run`
 starts one child workflow per branch under a parent
 (`MultiBranchScanWorkflow`), visible in the Temporal UI as a parent with
 child workflows. A webhook delivery only ever concerns one branch, so it
@@ -51,13 +51,13 @@ never needs to fan out - the branch list just gates which deliveries proceed.
 ## Project layout
 
 ```
-cli/                    the `codescan` CLI (typer)
+cli/                    the `gozu` CLI (typer)
   main.py                 entrypoint: init / run / up / down
-  init_wizard/             `codescan init` wizard, one file per step
-  scan_runner/             `codescan run`: scan, poll, trigger workflow
+  init_wizard/             `gozu init` wizard, one file per step
+  scan_runner/             `gozu run`: scan, poll, trigger workflow
   prerequisites/           downloading/verifying Java + sonar-scanner
   help_links.py            credential help-link lookup
-  stack.py                 `codescan up`/`down` (docker compose)
+  stack.py                 `gozu up`/`down` (docker compose)
 
 config/                 saved scanner+ticket credential sets ("configs")
   store.py                 CRUD against Postgres
@@ -117,8 +117,8 @@ credentials, stored in Postgres (`sql/init.sql`) via `config/store.py`.
 Every secret value is Fernet-encrypted (`config/crypto.py`) before it
 touches the database; `FERNET_KEY` lives only in `.env`, never committed.
 
-`codescan init` creates configs; `codescan run --config <name>` uses one;
-`codescan up` inspects all of them to decide which Docker Compose profiles
+`gozu init` creates configs; `gozu run --config <name>` uses one;
+`gozu up` inspects all of them to decide which Docker Compose profiles
 (`sonarqube-local`, `webhook`) need to be running.
 
 ## Development
@@ -136,12 +136,12 @@ questionary for every interactive prompt in the wizard.
 
 ## Docker Compose profiles
 
-Always-on: `postgres`, `temporal`. Conditionally started by `codescan up`
+Always-on: `postgres`, `temporal`. Conditionally started by `gozu up`
 based on your configs:
 
 - `sonarqube-local` - a local SonarQube instance, for configs using self-hosted scanning
 - `webhook` - the Flask receiver, for any config in `webhook` trigger mode
 
-`codescan down` stops containers; volumes/data persist. There's no
+`gozu down` stops containers; volumes/data persist. There's no
 destructive wipe command - use `docker compose down -v` yourself if you
 actually want to drop data.

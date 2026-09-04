@@ -10,7 +10,7 @@ key-by-key - each of POSTGRES_USER/PASSWORD/DB/HOST, the ports, and
 FERNET_KEY is filled in independently if (and only if) it's missing.
 
 The core logic lives in importable functions (resolve_ports, bootstrap_env)
-- codescan's `init` wizard calls these directly so it can show the user the
+- gozu's `init` wizard calls these directly so it can show the user the
 chosen ports and let them override before anything is written to disk,
 rather than just running this script as a subprocess.
 """
