@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 """
 `gozu init` - the interactive setup wizard. Provisions .env, checks/
 installs prerequisites, walks through scanner + ticket credential

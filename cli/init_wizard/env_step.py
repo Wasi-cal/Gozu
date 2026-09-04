@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+
 """Step 1-2 of the init wizard: .env bootstrap and Java prerequisite check."""
 
 import questionary

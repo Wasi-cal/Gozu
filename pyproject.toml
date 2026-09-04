@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 """
 Generates/merges .env: a random Postgres password, a fresh Fernet key, and
 free host ports (scripts/env_ports.py). Run once per machine/checkout,

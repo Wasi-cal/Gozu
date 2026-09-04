@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import scanner.screenshot as screenshot_module

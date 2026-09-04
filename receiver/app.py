@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 """
 Flask webhook receiver for SonarQube - multi-config routing (Phase 4).
 

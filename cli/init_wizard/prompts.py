@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+
 """
 Shared questionary-prompt helpers for the init wizard. Every select/confirm
 prompt uses questionary (arrow-key menus), not typed option strings - a

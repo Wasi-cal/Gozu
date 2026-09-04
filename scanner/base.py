@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 """
 Generic scanner interface plus shared constants. Adding a new scanner
 (Snyk, Semgrep, whatever) means writing a new ScannerClient subclass and

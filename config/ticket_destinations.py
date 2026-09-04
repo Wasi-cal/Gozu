@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+#
+# Depends on: PostgreSQL - data storage
+
 """
 CRUD for the `ticket_destinations` + `ticket_destination_credentials`
 tables (sql/init.sql) - a shared ticket board + credentials that more than

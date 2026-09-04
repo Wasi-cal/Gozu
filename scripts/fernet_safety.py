@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+
 """
 Safety check for generating a new FERNET_KEY: refuses (or, with
 force_new_key, confirms) when doing so would orphan Postgres rows already

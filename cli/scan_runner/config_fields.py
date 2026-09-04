@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 """Small derived values read from a config dict, shared by scanner_exec.py and workflow_trigger.py."""
 
 

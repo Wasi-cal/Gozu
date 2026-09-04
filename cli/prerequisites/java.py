@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 """Ensuring a Java runtime is available for sonar-scanner - see scanner.base.ScannerRequirements.host_dependencies."""
 
 import os

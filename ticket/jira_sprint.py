@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+#
+# Depends on: Jira (Atlassian) - direct API client
+
 """
 Active-sprint lookup + assignment for JiraClient - split out since it's a
 self-contained concern (Agile board -> active sprint -> add issue), not

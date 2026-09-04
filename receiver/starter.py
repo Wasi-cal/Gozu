@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+#
+# Depends on: Temporal (Temporal Technologies) - workflow orchestration
+
 """Starts ScanToTicketWorkflow in Temporal on behalf of the webhook route."""
 
 import os

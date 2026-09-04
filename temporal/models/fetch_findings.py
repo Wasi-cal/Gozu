@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+
 """Input model for fetch_findings_activity."""
 
 from pydantic import BaseModel

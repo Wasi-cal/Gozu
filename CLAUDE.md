@@ -117,3 +117,50 @@ This isn't a call for premature abstraction - three near-identical lines
 inline are still fine. It's specifically about not letting the same
 piece of logic (a download-and-verify flow, a client-construction
 branch, a derived value) exist in more than one place at a time.
+
+## File headers: copyright/author on every file, every machine
+
+Every source file in this repo carries a header, added retroactively in
+one pass and required on every new file since - this must happen the same
+way regardless of who's working or which machine, not something to
+remember case-by-case:
+
+```
+# Copyright (c) 2026 Calfus Inc.
+# Author: <original author's real name>
+# Editor: <anyone else who has since modified this file, comma-separated>
+```
+
+No license line - ownership is still being confirmed with the company;
+don't add one until that's resolved. Comment syntax matches the file
+(`#` for Python/YAML/TOML/Dockerfile/plain config files, `--` for
+`sql/init.sql` specifically, `//` for anything C-style). Place it after a
+shebang line where one exists (the shebang must stay the very first
+line), before everything else - including a module docstring - otherwise.
+
+- **Author** is whoever actually wrote the file first - for a brand new
+  file being created in this session, that's the user driving the
+  session, by their real name (check the git identity/context for this
+  repo rather than guessing or using "Claude"). Never invent a name.
+- **Editor** is anyone else who has since modified that same file -
+  omit the line entirely if there isn't one yet. When someone other than
+  the original author changes an existing file, add their name to the
+  Editor line if it isn't already there (comma-separate multiple
+  editors); don't touch Author once it's set.
+- **Dependency line** (optional, added under a blank `#`): a factual,
+  one-line "Depends on: X (Vendor) - what for" note, ONLY for a file that
+  directly talks to one of the four things this product's identity
+  depends on - SonarQube (SonarSource), Jira (Atlassian), Temporal
+  (Temporal Technologies), or PostgreSQL - and only when that file is
+  actually doing the talking (a direct API/SDK call), not just adjacent
+  to one. No language implying partnership, endorsement, or certification
+  by the third party - state the dependency, nothing more. Most files get
+  no dependency line at all; don't force one in where it doesn't apply.
+- Markdown files (`README.md`, `ARCHITECTURE.md`, this file) are
+  deliberately excluded - no comment syntax was ever specified for them,
+  and guessing one (e.g. an HTML comment block) isn't this convention's
+  call to make unilaterally. Generated/vendored files (e.g. `uv.lock`)
+  are excluded too - never hand-edit those anyway.
+- Skip this convention only if the user explicitly asks to - never
+  silently omit a header because a file feels too small or too generated
+  to bother.

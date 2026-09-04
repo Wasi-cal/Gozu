@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+#
+# Depends on: SonarQube (SonarSource) - direct API client
+
 """Real ScannerClient implementation for self-hosted SonarQube (Community Build, etc)."""
 
 from core.models import Finding

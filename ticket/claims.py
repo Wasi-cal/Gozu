@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+#
+# Depends on: PostgreSQL - data storage
+
 """
 Postgres-backed idempotency ledger for ticket creation - see sql/init.sql's
 `ticket_claims` table for why this exists: it closes the check-then-act

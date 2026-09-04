@@ -1,3 +1,7 @@
+-- Copyright (c) 2026 Calfus Inc.
+-- Author: Wasiullah Rafeeq S
+-- Editor: Prakrit Mohanty
+
 -- Mounted into the postgres container at /docker-entrypoint-initdb.d/, so
 -- this runs automatically the first time the postgres data volume is
 -- initialized (NOT on every container start - see README's Phase 1 section

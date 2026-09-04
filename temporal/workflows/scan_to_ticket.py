@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+#
+# Depends on: Temporal (Temporal Technologies) - workflow orchestration
+
 """Workflow orchestrating the scan -> ticket pipeline, generic over which scanner/ticket backend is behind it."""
 
 import asyncio

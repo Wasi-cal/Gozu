@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+
 FROM ghcr.io/astral-sh/uv:latest AS uv
 
 FROM python:3.12-slim

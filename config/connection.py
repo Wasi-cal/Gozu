@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+#
+# Depends on: PostgreSQL - data storage
+
 """Shared Postgres connection helper - used by config/store.py and config/ticket_destinations.py."""
 
 import os

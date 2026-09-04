@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+
 """
 Jira ticket-backend credential collection for the init wizard - either
 reuse an existing shared ticket_destinations row (config/ticket_destinations.py)

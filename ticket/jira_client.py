@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+#
+# Depends on: Jira (Atlassian) - direct API client
+
 """Jira implementation of TicketClient (see ticket/base.py for the contract)."""
 
 from pathlib import Path

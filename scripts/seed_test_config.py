@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 """
 Throwaway verification script - NOT part of the product (the real way to
 create a config is `gozu init`, cli/init_wizard.py).

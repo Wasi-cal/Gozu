@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+
 """
 Symmetric encryption for secrets stored in the configs table (sonar_token,
 jira_api_token, webhook_secret) - so a Postgres dump or a stray SELECT never

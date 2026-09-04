@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+
 """
 Small builders for Atlassian Document Format (ADF) nodes - Jira's rich-text
 JSON format for issue descriptions/comments. Kept generic (no Finding

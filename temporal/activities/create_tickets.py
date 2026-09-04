@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+#
+# Depends on: Temporal (Temporal Technologies) - workflow orchestration
+
 """Activity: create a ticket for each finding that doesn't already have one."""
 
 from temporalio import activity

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+
 """Running sonar-scanner itself and reading its result off disk/git."""
 
 import subprocess

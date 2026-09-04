@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 """
 Shared download/extract/verify helpers for managed host dependencies (see
 java.py, sonar_scanner.py) - a future ensure_*() for a new host dependency

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+
 from temporal.activities.capture_and_attach_screenshot import (
     capture_and_attach_screenshot_activity,
 )

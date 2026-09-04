@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+#
+# Depends on: Temporal (Temporal Technologies) - workflow orchestration
+
 import asyncio
 import logging
 import os

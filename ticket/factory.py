@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 """
 Pure-builder + env-reading-wrapper pair for constructing a TicketClient -
 see cli/prerequisites and scanner/factory.py for the same pattern.

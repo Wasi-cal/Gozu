@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 """
 `gozu run`'s actual logic: pick a config, run sonar-scanner, wait for
 SonarQube's server-side processing to finish, then trigger the Temporal

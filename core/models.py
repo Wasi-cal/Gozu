@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+
 """
 Normalized domain vocabulary shared by every scanner adapter (scanner/client.py)
 and every ticket adapter (ticket/client.py).

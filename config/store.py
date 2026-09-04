@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+#
+# Depends on: PostgreSQL - data storage
+
 """
 CRUD for the `configs` + `config_credentials` tables (sql/init.sql) - named
 sets of scanner/ticket credentials, normalized so a new scanner/ticket

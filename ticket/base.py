@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+
 """
 Generic ticketing interface every backend (Jira, and whatever's added
 later - Linear, GitHub Issues) implements. Adding a new destination means
