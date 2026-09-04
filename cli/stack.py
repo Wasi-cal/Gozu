@@ -63,7 +63,24 @@ def _print_webhook_urls(configs: list[dict]) -> None:
             )
 
 
+def _ensure_postgres_up() -> None:
+    """
+    list_configs() below needs a live Postgres connection - but postgres is
+    itself one of the services `up` is meant to start, so it has to come up
+    (and actually finish its healthcheck, not just start the container)
+    before any config_store call. Only matters when postgres isn't already
+    running (e.g. right after `gozu down`, which stops every container) -
+    a no-op if it's already up and healthy.
+    """
+    result = subprocess.run(["docker", "compose", "up", "-d", "--wait", "postgres"], check=False)
+    if result.returncode != 0:
+        typer.secho("Failed to start postgres.", fg=typer.colors.RED)
+        raise typer.Exit(code=result.returncode)
+
+
 def up() -> None:
+    _ensure_postgres_up()
+
     configs = config_store.list_configs()
     if not configs:
         typer.secho(
