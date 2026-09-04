@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+
 """Free-port probing and .env file parsing, shared by scripts/bootstrap_env.py and cli/init_wizard."""
 
 import os

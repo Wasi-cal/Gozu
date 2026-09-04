@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+#
+# Depends on: SonarQube (SonarSource) - direct API client
+
 """
 ScannerClient implementation for SonarQube Cloud.
 

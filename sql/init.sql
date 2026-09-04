@@ -1,3 +1,7 @@
+-- Copyright (c) 2026 Calfus Inc.
+-- Author: Wasiullah Rafeeq S
+-- Editor: Prakrit Mohanty
+
 -- Mounted into the postgres container at /docker-entrypoint-initdb.d/, so
 -- this runs automatically the first time the postgres data volume is
 -- initialized (NOT on every container start - see README's Phase 1 section
@@ -68,6 +72,38 @@ CREATE TABLE IF NOT EXISTS config_credentials (
     value      TEXT NOT NULL,
     UNIQUE (config_id, key)
 );
+
+-- A ticket destination is one shared board + credentials (today: a Jira
+-- project + its URL/email/API token) that more than one config can point
+-- at, instead of each config carrying its own copy of the same
+-- credentials. Purely additive, same philosophy as project_key/sonar_plan/
+-- branches above: `configs.ticket_destination_id` is nullable and left
+-- NULL on every config that already exists - config/store.py's
+-- get_config() falls back to reading Jira fields straight out of
+-- config_credentials (the original, still-supported shape) whenever it's
+-- NULL, and only resolves them from these tables when it's set. No
+-- backfill migration - a pre-existing config's embedded credentials are
+-- left exactly as they are.
+CREATE TABLE IF NOT EXISTS ticket_destinations (
+    id             SERIAL PRIMARY KEY,
+    name           TEXT NOT NULL UNIQUE,
+    ticket_backend TEXT NOT NULL DEFAULT 'jira',
+    project_key    TEXT NOT NULL,  -- the Jira project key, not a secret
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Same shape as config_credentials: Fernet-encrypted arbitrary key/value
+-- pairs (jira_url, jira_email, jira_api_token), not fixed columns.
+CREATE TABLE IF NOT EXISTS ticket_destination_credentials (
+    id             SERIAL PRIMARY KEY,
+    destination_id INTEGER NOT NULL REFERENCES ticket_destinations(id) ON DELETE CASCADE,
+    key            TEXT NOT NULL,
+    value          TEXT NOT NULL,
+    UNIQUE (destination_id, key)
+);
+
+ALTER TABLE configs ADD COLUMN IF NOT EXISTS ticket_destination_id
+    INTEGER REFERENCES ticket_destinations(id);
 
 -- Idempotency ledger for ticket creation (ticket/claims.py). Closes a
 -- check-then-act race in create_tickets_activity: without this, two

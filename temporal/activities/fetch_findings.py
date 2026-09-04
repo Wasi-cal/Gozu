@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+#
+# Depends on: Temporal (Temporal Technologies) - workflow orchestration
+
 """Activity: fetch findings for a project via the ScannerClient interface."""
 
 import subprocess

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 """
 Throwaway verification script - NOT part of the product (the real way to
 create a config is `gozu init`, cli/init_wizard.py).
@@ -40,7 +44,15 @@ def main() -> int:
     config_name = f"seed-test-{uuid.uuid4().hex[:8]}"
 
     print(f"Creating config '{config_name}'...")
-    config_id = config_store.create_config(config_name, credentials=CREDENTIALS, **CONFIG_FIELDS)
+    config_id = config_store.create_config(
+        config_name,
+        scanner_type=CONFIG_FIELDS["scanner_type"],
+        scanner_mode=CONFIG_FIELDS["scanner_mode"],
+        ticket_backend=CONFIG_FIELDS["ticket_backend"],
+        trigger_mode=CONFIG_FIELDS["trigger_mode"],
+        project_key=CONFIG_FIELDS["project_key"],
+        credentials=CREDENTIALS,
+    )
     print(f"Created config id={config_id}")
 
     print("Reading it back and decrypting...")

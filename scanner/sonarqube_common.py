@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+#
+# Depends on: SonarQube (SonarSource) - direct API client
+
 """
 Shared issues-fetch logic for both SonarQube backends (self-hosted Server
 and Cloud) - they hit the exact same /api/issues/search endpoint with the

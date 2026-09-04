@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 """Host prerequisite checks for the init wizard and `gozu run`: public re-exports."""
 
 from cli.prerequisites.java import check_java, ensure_java, java_env

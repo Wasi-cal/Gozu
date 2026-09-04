@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 """SonarQube Cloud (Free/Premium) credential collection for the init wizard."""
 
 import questionary

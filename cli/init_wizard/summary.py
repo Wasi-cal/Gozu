@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 """Prints the "config created" summary at the end of the init wizard."""
 
 import typer
@@ -13,6 +17,7 @@ def print_summary(
     sonar_plan: str | None,
     branches: str | None,
     trigger_mode: str,
+    ticket_destination_name: str | None = None,
 ) -> None:
     typer.secho("\nConfig created:", bold=True, fg=typer.colors.GREEN)
     typer.echo(f"  name:           {name}")
@@ -23,6 +28,8 @@ def print_summary(
     if branches:
         typer.echo(f"  branches:       {branches}")
     typer.echo("  ticket backend: jira")
+    if ticket_destination_name:
+        typer.echo(f"  ticket dest.:   {ticket_destination_name}")
     typer.echo(f"  trigger mode:   {trigger_mode}")
 
     if sonar_plan == "free":

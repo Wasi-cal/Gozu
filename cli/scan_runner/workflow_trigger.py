@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+#
+# Depends on: Temporal (Temporal Technologies) - workflow orchestration
+
 """Starting the Temporal workflow once SonarQube's analysis has finished."""
 
 import os

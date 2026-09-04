@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Prakrit Mohanty
+# Editor: Wasiullah Rafeeq S
+
 """Input model for capture_and_attach_screenshot_activity."""
 
 from pydantic import BaseModel

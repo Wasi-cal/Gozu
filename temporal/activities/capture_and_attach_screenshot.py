@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Prakrit Mohanty
+# Editor: Wasiullah Rafeeq S
+#
+# Depends on: Temporal (Temporal Technologies) - workflow orchestration
+
 """Activity: capture a screenshot of a finding and attach it to its ticket."""
 
 import os

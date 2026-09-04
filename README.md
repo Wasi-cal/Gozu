@@ -57,10 +57,12 @@ cli/                    the `gozu` CLI (typer)
   scan_runner/             `gozu run`: scan, poll, trigger workflow
   prerequisites/           downloading/verifying Java + sonar-scanner
   help_links.py            credential help-link lookup
-  stack.py                 `gozu up`/`down` (docker compose)
+  stack/                   `gozu up`/`down` (+ `--wipe`), Compose profile detection
 
 config/                 saved scanner+ticket credential sets ("configs")
   store.py                 CRUD against Postgres
+  connection.py            shared get_connection() (store.py + ticket_destinations.py)
+  ticket_destinations.py   shared ticket boards multiple configs can reference
   crypto.py                Fernet encryption for stored secrets
 
 scanner/                scanner backends
@@ -121,6 +123,30 @@ touches the database; `FERNET_KEY` lives only in `.env`, never committed.
 `gozu up` inspects all of them to decide which Docker Compose profiles
 (`sonarqube-local`, `webhook`) need to be running.
 
+### Ticket destinations - one shared board, many configs
+
+A config's Jira credentials can live in one of two places, and `gozu`
+doesn't care which when it actually creates tickets:
+
+- **Embedded** (every config created before this feature existed): the
+  config's own `config_credentials` rows carry its Jira URL/email/API
+  token/project key directly - the original shape, still fully supported.
+- **A shared ticket destination** (`config/ticket_destinations.py`, new
+  configs by default): the config just stores a `ticket_destination_id`
+  pointing at one `ticket_destinations` row, and any number of other
+  configs can point at that same row instead of each embedding their own
+  copy of the same credentials.
+
+Run `gozu init` a second time (a second repo, a second scanner config,
+whatever) and pick **Local or Cloud** as usual - when it gets to the Jira
+step, if a destination already exists you'll see "Use an existing ticket
+destination, or create a new one?" instead of being asked for a Jira
+URL/email/token again. Pick the existing one and the wizard skips straight
+to naming the config - zero Jira prompts. Both configs' tickets land on
+the same board, and dedupe (`ticket/claims.py`) still holds correctly
+across them, since it keys off the destination itself, not which config
+triggered the scan.
+
 ## Development
 
 ```bash
@@ -142,6 +168,29 @@ based on your configs:
 - `sonarqube-local` - a local SonarQube instance, for configs using self-hosted scanning
 - `webhook` - the Flask receiver, for any config in `webhook` trigger mode
 
-`gozu down` stops containers; volumes/data persist. There's no
-destructive wipe command - use `docker compose down -v` yourself if you
-actually want to drop data.
+`gozu down` and `gozu up` determine which of `sonarqube-local`/`webhook`
+are active the exact same way (`cli/stack/profiles.py`'s
+`active_profiles()`), so `down` correctly stops whichever of those got
+started - not just the always-on services.
+
+### `gozu down --wipe`
+
+`gozu down` alone only stops containers - volumes/data persist, and
+nothing is destroyed. `gozu down --wipe` is the one irreversible command
+in this CLI: it also deletes Postgres's volume (every config, ticket
+destination, and dedupe claim) and, if `sonarqube-local` was an active
+profile this run, local SonarQube's volume (scan history) too. Before
+doing anything destructive it prints exactly what it's about to delete -
+real row counts, not an estimate - along with the path a Postgres backup
+will be written to, and requires typing the literal word `wipe` to
+proceed; anything else cancels with zero side effects (the stack still
+ends up stopped from the non-destructive part, just not wiped, and no
+backup is created for a cancelled wipe).
+
+Once confirmed, a `pg_dump` of Postgres (configs, ticket destinations,
+dedupe claims - not SonarQube's volume, that's deliberately out of scope)
+is written to `~/.gozu/backups/wipe-<timestamp>.sql` before anything is
+actually deleted - the printed path is real, not aspirational. Backups
+older than 7 days are pruned the next time a wipe runs
+(`cli/stack/backup.py`'s `_RETENTION_DAYS`) - there's no separate
+scheduled cleanup job.

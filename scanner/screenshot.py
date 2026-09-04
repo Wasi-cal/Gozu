@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
+
 """
 Captures a screenshot of a SonarQube finding's source-viewer panel using
 Playwright, plus (best-effort) the flagged code and SonarQube's inline

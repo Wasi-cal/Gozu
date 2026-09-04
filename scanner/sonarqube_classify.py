@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+
 """
 Classifying a raw api/issues/search result as security-relevant (a
 vulnerability, or a hotspot migrated into the issues model).

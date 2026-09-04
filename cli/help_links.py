@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Wasiullah Rafeeq S
+
 """
 Doc links shown before each credential prompt in the init wizard, so a user
 who doesn't already know where e.g. a SonarQube token comes from isn't left
