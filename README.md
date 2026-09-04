@@ -61,6 +61,8 @@ cli/                    the `gozu` CLI (typer)
 
 config/                 saved scanner+ticket credential sets ("configs")
   store.py                 CRUD against Postgres
+  connection.py            shared get_connection() (store.py + ticket_destinations.py)
+  ticket_destinations.py   shared ticket boards multiple configs can reference
   crypto.py                Fernet encryption for stored secrets
 
 scanner/                scanner backends
@@ -120,6 +122,30 @@ touches the database; `FERNET_KEY` lives only in `.env`, never committed.
 `gozu init` creates configs; `gozu run --config <name>` uses one;
 `gozu up` inspects all of them to decide which Docker Compose profiles
 (`sonarqube-local`, `webhook`) need to be running.
+
+### Ticket destinations - one shared board, many configs
+
+A config's Jira credentials can live in one of two places, and `gozu`
+doesn't care which when it actually creates tickets:
+
+- **Embedded** (every config created before this feature existed): the
+  config's own `config_credentials` rows carry its Jira URL/email/API
+  token/project key directly - the original shape, still fully supported.
+- **A shared ticket destination** (`config/ticket_destinations.py`, new
+  configs by default): the config just stores a `ticket_destination_id`
+  pointing at one `ticket_destinations` row, and any number of other
+  configs can point at that same row instead of each embedding their own
+  copy of the same credentials.
+
+Run `gozu init` a second time (a second repo, a second scanner config,
+whatever) and pick **Local or Cloud** as usual - when it gets to the Jira
+step, if a destination already exists you'll see "Use an existing ticket
+destination, or create a new one?" instead of being asked for a Jira
+URL/email/token again. Pick the existing one and the wizard skips straight
+to naming the config - zero Jira prompts. Both configs' tickets land on
+the same board, and dedupe (`ticket/claims.py`) still holds correctly
+across them, since it keys off the destination itself, not which config
+triggered the scan.
 
 ## Development
 

@@ -65,7 +65,7 @@ def run_init_wizard() -> None:
     else:
         credentials, trigger_mode, project_key, sonar_plan, branches = collect_cloud_sonar()
 
-    credentials.update(collect_jira())
+    ticket_destination_id = collect_jira()
 
     typer.secho("Step 4/4: name this config", bold=True)
     name = _prompt_config_name()
@@ -80,6 +80,9 @@ def run_init_wizard() -> None:
         credentials=credentials,
         sonar_plan=sonar_plan,
         branches=branches,
+        ticket_destination_id=ticket_destination_id,
     )
 
-    print_summary(name, scanner_type, scanner_mode, project_key, sonar_plan, branches, trigger_mode)
+    destination = config_store.get_ticket_destination_by_id(ticket_destination_id)
+    destination_name = destination["name"] if destination else None
+    print_summary(name, scanner_type, scanner_mode, project_key, sonar_plan, branches, trigger_mode, destination_name)

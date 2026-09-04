@@ -11,30 +11,26 @@ never touches them, since it's for a picker list, not for use.
 Called "configs", not "profiles" - see sql/init.sql for why.
 """
 
-import os
-from typing import Any
-
-import psycopg
-from psycopg.rows import dict_row
-
+from config.connection import get_connection
 from config.crypto import decrypt_token, encrypt_token
+from config.ticket_destinations import (
+    create_ticket_destination,
+    get_ticket_destination,
+    get_ticket_destination_by_id,
+    list_ticket_destinations,
+)
 
-
-def get_connection() -> psycopg.Connection[dict[str, Any]]:
-    # `psycopg.connect` is `Connection.connect`, a classmethod returning
-    # `Self` - calling it unparameterized (the usual `psycopg.connect(...)`)
-    # can't infer the row type from `row_factory` through `Self` in every
-    # type checker (mypy accepts it; pyright doesn't). Parameterizing
-    # `Connection` explicitly before `.connect(...)` resolves `Self`
-    # correctly for both.
-    return psycopg.Connection[dict[str, Any]].connect(
-        host=os.environ["POSTGRES_HOST"],
-        port=os.environ["POSTGRES_PORT"],
-        user=os.environ["POSTGRES_USER"],
-        password=os.environ["POSTGRES_PASSWORD"],
-        dbname=os.environ["POSTGRES_DB"],
-        row_factory=dict_row,
-    )
+__all__ = [
+    "create_config",
+    "create_ticket_destination",
+    "delete_config",
+    "get_config",
+    "get_connection",
+    "get_ticket_destination",
+    "list_configs",
+    "list_ticket_destinations",
+    "set_credential",
+]
 
 
 def create_config(
@@ -47,6 +43,7 @@ def create_config(
     credentials: dict[str, str],
     sonar_plan: str | None = None,
     branches: str | None = None,
+    ticket_destination_id: int | None = None,
 ) -> int:
     """
     Insert a new config row plus one config_credentials row per entry in
@@ -63,13 +60,28 @@ def create_config(
     null/empty as "no restriction" wherever they're read, not an error.
     `branches` is a comma-separated list (e.g. "main,release/2.0"), one
     entry for a single-branch config, several for multi-branch Premium.
+
+    `ticket_destination_id` references a shared ticket_destinations row
+    instead of embedding Jira credentials here - leave it None for the
+    legacy shape. get_config() resolves whichever shape a config uses.
     """
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO configs "
-            "(name, scanner_type, scanner_mode, ticket_backend, trigger_mode, project_key, sonar_plan, branches) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
-            (name, scanner_type, scanner_mode, ticket_backend, trigger_mode, project_key, sonar_plan, branches),
+            "(name, scanner_type, scanner_mode, ticket_backend, trigger_mode, project_key, sonar_plan, branches, "
+            "ticket_destination_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (
+                name,
+                scanner_type,
+                scanner_mode,
+                ticket_backend,
+                trigger_mode,
+                project_key,
+                sonar_plan,
+                branches,
+                ticket_destination_id,
+            ),
         )
         row = cur.fetchone()
         if row is None:
@@ -90,6 +102,14 @@ def get_config(name: str) -> dict | None:
     Look up a config by name: the configs columns at the top level, plus a
     nested "credentials" dict of decrypted key/value pairs. None if not
     found, never raises for a miss.
+
+    If `ticket_destination_id` is set, Jira fields come from the
+    referenced ticket_destinations row instead of this config's own
+    config_credentials; if NULL (every pre-existing config), they're read
+    straight out of config_credentials as always. Either way the returned
+    "credentials" dict ends up the same flat shape, so callers
+    (ticket/factory.py's build_ticket_client()) never need to know which
+    path resolved it.
     """
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT * FROM configs WHERE name = %s", (name,))
@@ -101,6 +121,14 @@ def get_config(name: str) -> dict | None:
         credential_rows = cur.fetchall()
 
     credentials = {row["key"]: decrypt_token(row["value"]) for row in credential_rows}
+
+    destination_id = config_row.get("ticket_destination_id")
+    if destination_id is not None:
+        destination = get_ticket_destination_by_id(destination_id)
+        if destination is not None:
+            credentials["jira_project_key"] = destination["project_key"]
+            credentials.update(destination["credentials"])
+
     return {**config_row, "credentials": credentials}
 
 
