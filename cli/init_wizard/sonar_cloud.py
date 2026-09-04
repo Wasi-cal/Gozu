@@ -9,7 +9,7 @@ from cli.init_wizard.sonar_local import prompt_project_key
 
 FREE_PLAN_WARNING = (
     "SonarQube Cloud's Free plan only analyzes pull requests once they're merged to main - "
-    "never before. This isn't a limitation of how codescan triggers analysis; it's a hard, "
+    "never before. This isn't a limitation of how gozu triggers analysis; it's a hard, "
     "server-side restriction on the Free plan itself. Any tickets this config creates will "
     "reflect post-merge analysis only, never pre-merge/PR-time findings."
 )
@@ -20,7 +20,7 @@ def _collect_cloud_free() -> tuple[str, str, str]:
     Returns (trigger_mode, sonar_plan, branches). Free's hard server-side
     limitation (analysis only happens post-merge to main) means there's
     exactly one trigger mechanism that can ever apply here - polling via
-    `codescan run --watch` - so trigger_mode is set directly, no select
+    `gozu run --watch` - so trigger_mode is set directly, no select
     prompt for it.
     """
     typer.secho(f"\n{FREE_PLAN_WARNING}", fg=typer.colors.YELLOW, bold=True)

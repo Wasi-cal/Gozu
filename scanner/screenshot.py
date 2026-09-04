@@ -58,7 +58,7 @@ async def _get_context(token: str) -> BrowserContext:
     """
     One shared Browser for the life of the worker process (one launch
     total), but one Context per distinct token - different configs
-    (`codescan run` against different SonarQube instances/accounts) need
+    (`gozu run` against different SonarQube instances/accounts) need
     different Basic-auth headers, and a Context's extra_http_headers are
     fixed at creation time.
     """

@@ -17,7 +17,7 @@ def resolve_container_host(url: str) -> str:
     """
     The worker always runs inside the Docker Compose network
     (docker-compose.yml); a config's `sonar_host_url` is a *host*-side
-    address (wherever `codescan run` reaches SonarQube from), which
+    address (wherever `gozu run` reaches SonarQube from), which
     "localhost"/"127.0.0.1" never resolves to from inside the worker's
     own container. `host.docker.internal` does - natively on Docker
     Desktop, or via the "host.docker.internal:host-gateway" extra_hosts

@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 
 from cli.prerequisites.archive import (
-    CODESCAN_HOME,
+    GOZU_HOME,
     arch_name,
     download_archive,
     extract_archive,
@@ -17,7 +17,7 @@ from cli.prerequisites.archive import (
     verify_runnable,
 )
 
-JRE_DIR = CODESCAN_HOME / "jre"
+JRE_DIR = GOZU_HOME / "jre"
 
 # Adoptium (Eclipse Temurin) always publishes a "latest" build per LTS
 # feature version - 21 is the current LTS at time of writing.
@@ -34,7 +34,7 @@ def check_java() -> bool:
 
 
 def _managed_java_binary() -> Path | None:
-    """The java binary inside our own ~/.codescan/jre/, if we've downloaded one before."""
+    """The java binary inside our own ~/.gozu/jre/, if we've downloaded one before."""
     if not JRE_DIR.is_dir():
         return None
 
@@ -52,11 +52,11 @@ def ensure_java() -> Path:
     """
     Return a path to a usable `java` binary, downloading one if needed.
 
-    Checks, in order: a JRE we already downloaded into ~/.codescan/jre/
+    Checks, in order: a JRE we already downloaded into ~/.gozu/jre/
     (so re-running the wizard doesn't re-download every time), then
     whatever's on PATH (check_java()). Only if both are absent does this
     download a portable Eclipse Temurin JRE build for this host's OS/arch
-    into ~/.codescan/jre/ - no system-wide install, fully contained to
+    into ~/.gozu/jre/ - no system-wide install, fully contained to
     that directory.
     """
     managed = _managed_java_binary()
@@ -97,7 +97,7 @@ def java_env() -> dict[str, str]:
     """
     An environment dict for running sonar-scanner (or anything else that
     shells out to `java`): JAVA_HOME/PATH point at whatever ensure_java()
-    resolved to, so a managed JRE in ~/.codescan/jre/ is actually found by
+    resolved to, so a managed JRE in ~/.gozu/jre/ is actually found by
     sonar-scanner's own launcher script - it's never installed/symlinked
     anywhere on the real system PATH or JAVA_HOME.
     """

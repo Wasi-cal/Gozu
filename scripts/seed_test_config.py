@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Throwaway verification script - NOT part of the product (the real way to
-create a config is `codescan init`, cli/init_wizard.py).
+create a config is `gozu init`, cli/init_wizard.py).
 
 Inserts one dummy config via config_store.create_config(), reads it back via
 config_store.get_config(), and confirms every decrypted credential

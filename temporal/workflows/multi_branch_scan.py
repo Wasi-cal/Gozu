@@ -1,5 +1,5 @@
 """
-Workflow for a multi-branch config's manual/direct scan (`codescan run`):
+Workflow for a multi-branch config's manual/direct scan (`gozu run`):
 fans out into one ScanToTicketWorkflow child per branch, concurrently,
 aggregating their created/skipped results into one summary.
 

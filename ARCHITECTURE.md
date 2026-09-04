@@ -180,7 +180,7 @@ which ticketing system sit behind it:
   and hotspots into one list is an internal detail of each adapter, not
   part of the generic contract). Building a concrete client is split in
   two (Phase 3): `build_scanner_client(scanner_type, scanner_mode,
-  credentials)` is a pure constructor (no env reads) used by `codescan run`
+  credentials)` is a pure constructor (no env reads) used by `gozu run`
   with a specific config's credentials; `get_scanner_client()` is a thin
   wrapper that reads `SCANNER_TYPE`/`SONAR_*` from the environment and
   delegates to the builder, kept for the webhook receiver, which has no
@@ -328,7 +328,7 @@ running).
   product" and everything upstream; nothing outside `ticket/client.py`
   should ever construct `JiraClient` directly. Same split as
   `scanner/client.py` (Phase 3): `build_ticket_client(ticket_backend,
-  credentials)` is a pure constructor used by `codescan run`'s per-config
+  credentials)` is a pure constructor used by `gozu run`'s per-config
   credentials; `get_ticket_client()` reads `TICKET_BACKEND`/`JIRA_*` from
   the environment and delegates to it, kept for the webhook receiver.
 - **`JiraClient`** — the only concrete implementation today. Every

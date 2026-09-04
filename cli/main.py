@@ -1,4 +1,4 @@
-"""codescan CLI entrypoint (see pyproject.toml's [project.scripts])."""
+"""gozu CLI entrypoint (see pyproject.toml's [project.scripts])."""
 
 import time
 
@@ -11,7 +11,7 @@ from cli.stack import up as stack_up
 from scripts.bootstrap_env import load_into_environ
 
 app = typer.Typer(
-    name="codescan",
+    name="gozu",
     help="Scan code with SonarQube and auto-create Jira tickets for vulnerabilities.",
 )
 
@@ -22,7 +22,7 @@ def _load_env() -> None:
     Load .env (if it exists yet) into this process's environment before any
     command runs - config.store and friends read POSTGRES_HOST etc from
     os.environ, which a `source .env` in the shell normally provides, but
-    codescan can't assume the caller did that.
+    gozu can't assume the caller did that.
     """
     load_into_environ()
 

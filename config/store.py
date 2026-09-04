@@ -124,7 +124,7 @@ def delete_config(name: str) -> bool:
 def set_credential(name: str, key: str, value: str) -> None:
     """
     Insert or update a single credential on an existing config, encrypting
-    `value` first. Used by `codescan up` to persist a generated
+    `value` first. Used by `gozu up` to persist a generated
     webhook_secret onto a config that predates one - not a general
     config-editing API (create_config() is still the only way to set
     everything else). Raises ValueError if no config named `name` exists.

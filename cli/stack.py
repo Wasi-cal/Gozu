@@ -1,5 +1,5 @@
 """
-`codescan up`/`codescan down` - bringing the local Docker Compose
+`gozu up`/`gozu down` - bringing the local Docker Compose
 infrastructure up/down, with which profiles to activate determined by
 whatever configs currently exist (see cli/init_wizard.py for how those
 get created).
@@ -58,7 +58,7 @@ def _print_webhook_urls(configs: list[dict]) -> None:
             typer.echo(
                 f"\n'{config['name']}' is Cloud + webhook mode - {url} only resolves inside this "
                 "Docker network. You'll need to expose it externally yourself (a tunnel, a public "
-                "deploy, etc) for SonarQube Cloud to actually reach it - codescan doesn't set that "
+                "deploy, etc) for SonarQube Cloud to actually reach it - gozu doesn't set that "
                 "up automatically."
             )
 
@@ -67,7 +67,7 @@ def up() -> None:
     configs = config_store.list_configs()
     if not configs:
         typer.secho(
-            "No configs found - run `codescan init` first. Bringing up always-on services only.",
+            "No configs found - run `gozu init` first. Bringing up always-on services only.",
             fg=typer.colors.YELLOW,
         )
 

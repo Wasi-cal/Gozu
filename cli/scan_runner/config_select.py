@@ -1,4 +1,4 @@
-"""Resolving which saved config `codescan run` should use."""
+"""Resolving which saved config `gozu run` should use."""
 
 import questionary
 import typer
@@ -9,7 +9,7 @@ import config.store as config_store
 def select_config(name: str | None) -> dict:
     """
     A given `name` is looked up directly (clear error if it doesn't
-    exist). With no name: errors if none exist ("run `codescan init`
+    exist). With no name: errors if none exist ("run `gozu init`
     first"), auto-selects (and announces) the only one if exactly one
     exists, or shows an informed questionary select (name + scanner_mode +
     trigger_mode, not just a bare name list) if there are several.
@@ -17,13 +17,13 @@ def select_config(name: str | None) -> dict:
     if name:
         config = config_store.get_config(name)
         if config is None:
-            typer.secho(f"No config named '{name}' found. Run `codescan init` to create one.", fg=typer.colors.RED)
+            typer.secho(f"No config named '{name}' found. Run `gozu init` to create one.", fg=typer.colors.RED)
             raise typer.Exit(code=1)
         return config
 
     configs = config_store.list_configs()
     if not configs:
-        typer.secho("No configs found - run `codescan init` first.", fg=typer.colors.RED)
+        typer.secho("No configs found - run `gozu init` first.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
     if len(configs) == 1:
