@@ -67,11 +67,17 @@ def run_init_wizard() -> None:
     typer.echo("Bringing up Postgres ...")
     ensure_postgres_up(stack_dir)
 
-    step_ensure_java()
-
-    typer.secho("Step 3/4: scanner + credentials", bold=True)
+    typer.secho("Step 2/3: scanner + credentials", bold=True)
     scanner_type = _select_scanner()
     scanner_mode = select_scanner_mode()
+
+    # Java/sonar-scanner are only ever needed to run a scan on this host -
+    # Cloud's analysis happens on SonarQube Cloud's own infrastructure, so
+    # there's nothing to download for it. Deliberately after the Local/Cloud
+    # choice, not before - asking unconditionally downloaded Java even for
+    # configs that would never use it.
+    if scanner_mode == "local":
+        step_ensure_java()
 
     sonar_plan: str | None = None
     branches: str | None = None
@@ -83,7 +89,7 @@ def run_init_wizard() -> None:
 
     ticket_destination_id = collect_jira()
 
-    typer.secho("Step 4/4: name this config", bold=True)
+    typer.secho("Step 3/3: name this config", bold=True)
     name = _prompt_config_name()
 
     config_store.create_config(
