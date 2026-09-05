@@ -38,20 +38,33 @@ def profile_flags(profiles: set[str]) -> list[str]:
     return flags
 
 
+def ensure_service_up(stack_dir: Path, service: str, profile: str | None = None) -> None:
+    """
+    Bring up one Compose service and wait for its healthcheck, regardless
+    of what else is running - a no-op if it's already up and healthy.
+    `stack_dir` is the materialized docker-compose.yml's directory (see
+    cli/stack/files.py's ensure_stack_files()) - `docker compose` resolves
+    the compose file from cwd, not this file's location. `profile` is
+    needed for services gated behind one (e.g. sonarqube-local) - without
+    it, `up` can't see the service at all, profile or not.
+    """
+    command = ["docker", "compose"]
+    if profile:
+        command += ["--profile", profile]
+    command += ["up", "-d", "--wait", service]
+    result = subprocess.run(command, check=False, cwd=stack_dir)
+    if result.returncode != 0:
+        typer.secho(f"Failed to start {service}.", fg=typer.colors.RED)
+        raise typer.Exit(code=result.returncode)
+
+
 def ensure_postgres_up(stack_dir: Path) -> None:
     """
     Reading configs needs a live Postgres connection - but postgres is
     itself one of the services `up`/`down` manage, so it has to come up
-    (and actually finish its healthcheck, not just start the container)
-    before any config_store call. A no-op if it's already up and healthy.
-    `stack_dir` is the materialized docker-compose.yml's directory (see
-    cli/stack/files.py's ensure_stack_files()) - `docker compose` resolves
-    the compose file from cwd, not this file's location.
+    before any config_store call.
     """
-    result = subprocess.run(["docker", "compose", "up", "-d", "--wait", "postgres"], check=False, cwd=stack_dir)
-    if result.returncode != 0:
-        typer.secho("Failed to start postgres.", fg=typer.colors.RED)
-        raise typer.Exit(code=result.returncode)
+    ensure_service_up(stack_dir, "postgres")
 
 
 def stop(profiles: set[str], stack_dir: Path) -> None:

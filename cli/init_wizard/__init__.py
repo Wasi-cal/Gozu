@@ -77,7 +77,7 @@ def run_init_wizard() -> None:
     branches: str | None = None
 
     if scanner_mode == "local":
-        credentials, trigger_mode, project_key = collect_local_sonar()
+        credentials, trigger_mode, project_key = collect_local_sonar(stack_dir)
     else:
         credentials, trigger_mode, project_key, sonar_plan, branches = collect_cloud_sonar()
 
