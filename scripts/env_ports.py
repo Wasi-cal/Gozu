@@ -7,7 +7,12 @@ import os
 import socket
 from pathlib import Path
 
-ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+from scripts.paths import STACK_DIR
+
+# ~/.gozu/stack/.env, not a path relative to this file - a pip install has
+# no repo checkout for a relative path to land in, and docker-compose.yml's
+# `env_file: .env` needs .env alongside it (see cli/stack/files.py).
+ENV_PATH = STACK_DIR / ".env"
 
 # Host-side default ports.
 DEFAULT_PORTS: dict[str, int] = {

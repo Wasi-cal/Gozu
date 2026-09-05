@@ -16,7 +16,9 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-BACKUP_DIR = Path.home() / ".gozu" / "backups"
+from scripts.paths import GOZU_HOME
+
+BACKUP_DIR = GOZU_HOME / "backups"
 
 # How long a backup sticks around before the next wipe prunes it - a
 # named constant so it's easy to tune later, not a magic number buried
@@ -47,21 +49,24 @@ def prune_old_backups() -> None:
             path.unlink()
 
 
-def create_backup(path: Path) -> None:
+def create_backup(path: Path, stack_dir: Path) -> None:
     """
     Dumps the running postgres container's database to `path` (see
     next_backup_path()). Reads POSTGRES_USER/POSTGRES_DB from the
     container's own environment (the same values docker-compose.yml set
     from .env), not the host's, so this doesn't depend on the calling
     shell having sourced .env. Prunes old backups first, per
-    prune_old_backups().
+    prune_old_backups(). `stack_dir` is the materialized docker-compose.yml's
+    directory (see cli/stack/files.py's ensure_stack_files()) - `docker
+    compose exec` resolves the compose file from cwd, not this file's
+    location.
     """
     prune_old_backups()
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
     command = ["docker", "compose", "exec", "-T", "postgres", "sh", "-c", 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"']
     with path.open("w") as f:
-        result = subprocess.run(command, stdout=f, stderr=subprocess.PIPE, text=True, check=False)
+        result = subprocess.run(command, stdout=f, stderr=subprocess.PIPE, text=True, check=False, cwd=stack_dir)
 
     if result.returncode != 0:
         path.unlink(missing_ok=True)

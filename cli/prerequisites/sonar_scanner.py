@@ -12,7 +12,6 @@ from pathlib import Path
 import typer
 
 from cli.prerequisites.archive import (
-    GOZU_HOME,
     arch_name,
     download_archive,
     extract_archive,
@@ -21,6 +20,7 @@ from cli.prerequisites.archive import (
     verify_runnable,
 )
 from cli.prerequisites.java import java_env
+from scripts.paths import GOZU_HOME
 
 SONAR_SCANNER_DIR = GOZU_HOME / "sonar-scanner"
 

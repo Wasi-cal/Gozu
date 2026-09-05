@@ -15,13 +15,16 @@ import subprocess
 import typer
 
 import config.store as config_store
+from cli.stack.files import require_initialized
 from cli.stack.profiles import active_profiles, ensure_postgres_up, profile_flags, stop
 from cli.stack.webhooks import ensure_webhook_secrets, print_webhook_urls
 from cli.stack.wipe import confirm_and_wipe, gather_preview
+from scripts.paths import STACK_DIR
 
 
 def up() -> None:
-    ensure_postgres_up()
+    require_initialized()
+    ensure_postgres_up(STACK_DIR)
 
     configs = config_store.list_configs()
     if not configs:
@@ -35,13 +38,13 @@ def up() -> None:
 
     command = ["docker", "compose", *profile_flags(profiles), "up", "-d"]
     typer.echo("Running: " + " ".join(command))
-    result = subprocess.run(command, check=False)
+    result = subprocess.run(command, check=False, cwd=STACK_DIR)
     if result.returncode != 0:
         typer.secho("docker compose up failed.", fg=typer.colors.RED)
         raise typer.Exit(code=result.returncode)
 
     typer.echo("\nStatus:")
-    subprocess.run(["docker", "compose", "ps"], check=False)
+    subprocess.run(["docker", "compose", "ps"], check=False, cwd=STACK_DIR)
     if "sonarqube-local" in profiles:
         typer.secho(
             "\nsonarqube can take 30-60s+ to show healthy - check `docker compose ps` again shortly.", dim=True
@@ -59,7 +62,8 @@ def down(wipe: bool = False) -> None:
     irreversible command in this CLI, gated behind typing the literal
     word "wipe".
     """
-    ensure_postgres_up()
+    require_initialized()
+    ensure_postgres_up(STACK_DIR)
     configs = config_store.list_configs()
     profiles = active_profiles(configs)
 
@@ -71,9 +75,9 @@ def down(wipe: bool = False) -> None:
     if wipe:
         destinations_count, claims_count, wipes_sonarqube = gather_preview(profiles)
 
-    stop(profiles)
+    stop(profiles, STACK_DIR)
 
     if not wipe:
         return
 
-    confirm_and_wipe(profiles, len(configs), destinations_count, claims_count, wipes_sonarqube)
+    confirm_and_wipe(profiles, len(configs), destinations_count, claims_count, wipes_sonarqube, STACK_DIR)
