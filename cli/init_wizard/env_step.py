@@ -20,7 +20,7 @@ from scripts.bootstrap_env import (
 
 
 def step_bootstrap_env() -> None:
-    typer.secho("Step 1/4: environment (.env)", bold=True)
+    typer.secho("Step 1/3: environment (.env)", bold=True)
 
     # Prefer whatever's already in .env for a port that's already set - a
     # fresh probe would see it as "taken" once the service it belongs to
@@ -54,5 +54,6 @@ def step_bootstrap_env() -> None:
 
 
 def step_ensure_java() -> None:
-    typer.secho("Step 2/4: prerequisites", bold=True)
+    """Only relevant for scanner_mode == "local" - Cloud never runs sonar-scanner on this host at all, so there's nothing to download for it."""
+    typer.echo("Checking prerequisites (Java, for sonar-scanner) ...")
     ensure_java()
