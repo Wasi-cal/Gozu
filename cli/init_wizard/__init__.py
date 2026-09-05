@@ -20,6 +20,8 @@ from cli.init_wizard.prompts import ask_or_exit
 from cli.init_wizard.sonar_cloud import collect_cloud_sonar
 from cli.init_wizard.sonar_local import collect_local_sonar, select_scanner_mode
 from cli.init_wizard.summary import print_summary
+from cli.stack.files import ensure_stack_files
+from cli.stack.profiles import ensure_postgres_up
 from scanner.base import SCANNER_REGISTRY
 
 
@@ -55,6 +57,16 @@ def run_init_wizard() -> None:
     typer.secho("gozu init", bold=True, underline=True)
 
     step_bootstrap_env()
+
+    # Materializes docker-compose.yml/Dockerfile/sql/init.sql (+ the source
+    # tree the worker/receiver images build from) into ~/.gozu/ - see
+    # cli/stack/files.py. Postgres has to come up right here, before
+    # `gozu up` is ever run, because create_config() below needs a live
+    # connection to save this config at all.
+    stack_dir = ensure_stack_files()
+    typer.echo("Bringing up Postgres ...")
+    ensure_postgres_up(stack_dir)
+
     step_ensure_java()
 
     typer.secho("Step 3/4: scanner + credentials", bold=True)

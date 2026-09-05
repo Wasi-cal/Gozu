@@ -1,6 +1,12 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
 
+# Pinned explicitly - otherwise docker compose derives the project name
+# (and so every container/volume/network name) from the compose file's
+# parent directory name, which for a pip install is ~/.gozu/stack/ (see
+# cli/stack/files.py), not a checkout dir named after this repo.
+name: gozu
+
 services:
   postgres:
     image: postgres:16-alpine

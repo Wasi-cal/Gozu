@@ -17,8 +17,6 @@ from pathlib import Path
 
 import requests
 
-GOZU_HOME = Path.home() / ".gozu"
-
 
 def os_name(labels: dict[str, str]) -> str:
     """Map platform.system() to one of `labels`' keys, or raise if unsupported."""

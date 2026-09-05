@@ -4,6 +4,7 @@
 """`gozu down --wipe`'s destructive teardown: gathering what would be destroyed, confirming, then actually removing it."""
 
 import subprocess
+from pathlib import Path
 
 import questionary
 import typer
@@ -29,7 +30,12 @@ def gather_preview(profiles: set[str]) -> tuple[int, int, bool]:
 
 
 def confirm_and_wipe(
-    profiles: set[str], configs_count: int, destinations_count: int, claims_count: int, wipes_sonarqube: bool
+    profiles: set[str],
+    configs_count: int,
+    destinations_count: int,
+    claims_count: int,
+    wipes_sonarqube: bool,
+    stack_dir: Path,
 ) -> None:
     backup_target = next_backup_path()
 
@@ -57,14 +63,14 @@ def confirm_and_wipe(
     # down() already stopped postgres as part of the plain-stop step above -
     # briefly bring it back so pg_dump has something to actually connect to;
     # the docker compose down -v below removes it for real either way.
-    ensure_postgres_up()
+    ensure_postgres_up(stack_dir)
     typer.echo("Backing up Postgres before wiping ...")
-    create_backup(backup_target)
+    create_backup(backup_target, stack_dir)
     typer.secho(f"Backup written: {backup_target}", fg=typer.colors.GREEN)
 
     command = ["docker", "compose", *profile_flags(profiles), "down", "-v"]
     typer.echo("Running: " + " ".join(command))
-    result = subprocess.run(command, check=False)
+    result = subprocess.run(command, check=False, cwd=stack_dir)
     if result.returncode != 0:
         raise typer.Exit(code=result.returncode)
     typer.secho("Stack wiped - configs, ticket destinations, dedupe claims, and volumes are gone.", fg=typer.colors.RED)
