@@ -54,7 +54,11 @@ services:
       - sonarqube_extensions:/opt/sonarqube/extensions
       - sonarqube_logs:/opt/sonarqube/logs
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:9000/api/system/status | grep -q '\"status\":\"UP\"'"]
+      # wget isn't in this image anymore (removed as of the current
+      # sonarqube:community base) - confirmed live it just fails every
+      # attempt with "wget: not found", so the container never reports
+      # healthy even once SonarQube itself is genuinely up. curl is.
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/api/system/status | grep -q '\"status\":\"UP\"'"]
       interval: 10s
       timeout: 5s
       retries: 30
