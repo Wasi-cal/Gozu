@@ -105,7 +105,17 @@ class JiraClient(TicketClient):
         self._raise_for_status(response, "create issue")
         issue_key = response.json()["key"]
 
-        self._sprints.add_issue(issue_key)
+        # The issue above is already created in Jira at this point - sprint
+        # assignment is a bonus, best-effort step (see ticket/jira_sprint.py's
+        # own fallbacks for "no board"/"no active sprint"/Kanban), and must
+        # never be able to fail ticket creation itself. Any other failure
+        # here (a network blip, an unexpected Jira response) gets the same
+        # treatment: log and move on, not raise.
+        try:
+            self._sprints.add_issue(issue_key)
+        except Exception as e:
+            activity.logger.warning(f"Sprint assignment failed for {issue_key}, leaving it in the backlog: {e}")
+
         return issue_key
 
     def attach_screenshot(self, issue_key: str, image_path: Path) -> None:
