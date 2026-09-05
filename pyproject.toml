@@ -21,12 +21,20 @@ dependencies = [
     "psycopg[binary]",
     "typer",
     "questionary",
-    "pytest",
-    "pytest-asyncio",
 ]
 
 [project.scripts]
 gozu = "cli.main:app"
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.uv]
+# `uv sync` (bare) still installs `dev` locally, same as before this split -
+# only a Docker build (which passes --no-group dev explicitly, see
+# Dockerfile) skips it. pytest has no reason to be in a shipped
+# worker/receiver image at all - it was never imported by any of them.
+default-groups = ["dev"]
 
 [tool.hatch.build.targets.wheel]
 include = [

@@ -32,29 +32,35 @@ async def create_tickets_activity(input: CreateTicketsInput) -> TicketResult:
     created = []
     skipped = []
 
-    for finding in input.findings:
-        ledger_ticket = claims.get_ticket(destination, finding.key)
-        if ledger_ticket:
-            skipped.append(finding.key)
-            continue
-
-        if not claims.claim(destination, finding.key):
-            # Another concurrent run holds this claim right now.
-            skipped.append(finding.key)
-            continue
-
-        try:
-            existing_ticket = client.find_existing(finding.key)
-            if existing_ticket:
-                claims.record_ticket(destination, finding.key, existing_ticket)
+    # One connection for the whole activity, not one per claims call per
+    # finding - see claims.get_connection(). Each mutating call still
+    # commits immediately (claim/record_ticket/release), so concurrent
+    # runs see each other's claims exactly as before; only the
+    # connect/auth/close overhead is no longer paid per finding.
+    with claims.get_connection() as conn:
+        for finding in input.findings:
+            ledger_ticket = claims.get_ticket(conn, destination, finding.key)
+            if ledger_ticket:
                 skipped.append(finding.key)
                 continue
 
-            ticket_key = client.create_ticket(finding)
-            claims.record_ticket(destination, finding.key, ticket_key)
-            created.append(CreatedTicket(finding_key=finding.key, ticket_key=ticket_key))
-        except Exception:
-            claims.release(destination, finding.key)
-            raise
+            if not claims.claim(conn, destination, finding.key):
+                # Another concurrent run holds this claim right now.
+                skipped.append(finding.key)
+                continue
+
+            try:
+                existing_ticket = client.find_existing(finding.key)
+                if existing_ticket:
+                    claims.record_ticket(conn, destination, finding.key, existing_ticket)
+                    skipped.append(finding.key)
+                    continue
+
+                ticket_key = client.create_ticket(finding)
+                claims.record_ticket(conn, destination, finding.key, ticket_key)
+                created.append(CreatedTicket(finding_key=finding.key, ticket_key=ticket_key))
+            except Exception:
+                claims.release(conn, destination, finding.key)
+                raise
 
     return TicketResult(created=created, skipped=skipped)
