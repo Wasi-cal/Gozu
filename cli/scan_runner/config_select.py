@@ -8,23 +8,22 @@ import questionary
 import typer
 
 import config.store as config_store
+from cli.config_lookup import resolve_config_or_prompt
 from cli.status import error
 
 
 def select_config(name: str | None) -> dict:
     """
-    A given `name` is looked up directly (clear error if it doesn't
-    exist). With no name: errors if none exist ("run `gozu init`
+    A given `name` is looked up via resolve_config_or_prompt() - a miss
+    explains why, then offers a picker of what actually exists (plus
+    Exit) rather than a bare error, same as gozu up/config edit/config
+    delete. With no name: errors if none exist ("run `gozu init`
     first"), auto-selects (and announces) the only one if exactly one
     exists, or shows an informed questionary select (name + scanner_mode +
     trigger_mode, not just a bare name list) if there are several.
     """
     if name:
-        config = config_store.get_config(name)
-        if config is None:
-            error(f"No config named '{name}' found. Run `gozu init` to create one.")
-            raise typer.Exit(code=1)
-        return config
+        return resolve_config_or_prompt(name)
 
     configs = config_store.list_configs()
     if not configs:

@@ -14,8 +14,9 @@ import typer
 
 import config.store as config_store
 from cli.config_cmd.edit import edit_command
+from cli.config_lookup import resolve_config_or_prompt
 from cli.prompts import ask_or_exit
-from cli.status import error, success
+from cli.status import success
 
 __all__ = ["delete_command", "edit_command", "list_command"]
 
@@ -42,10 +43,11 @@ def delete_command(name: str) -> None:
     using it. A single y/N confirmation, not --wipe's typed-word ritual -
     this is scoped to one config, not the whole store.
     """
-    config = config_store.get_config(name)
-    if config is None:
-        error(f"No config named '{name}' found. Run `gozu config list` to see what's available.")
-        raise typer.Exit(code=1)
+    config = resolve_config_or_prompt(name)
+    # Use the resolved config's own name from here on, not the (possibly
+    # wrong) `name` argument - resolve_config_or_prompt() may have picked
+    # a different config via its "did you mean" recovery picker.
+    name = config["name"]
 
     typer.echo(f"This will delete config '{name}':")
     typer.echo(f"  scanner:  {config['scanner_type']} ({config['scanner_mode']})")

@@ -13,6 +13,7 @@ output), and wipe.py (`--wipe`'s destructive teardown).
 import typer
 
 import config.store as config_store
+from cli.config_lookup import resolve_config_or_prompt
 from cli.stack.cleanup import InterruptCleanup
 from cli.stack.files import require_initialized
 from cli.stack.profiles import (
@@ -77,11 +78,7 @@ def up(config: str | None = None) -> None:
         ensure_postgres_up(STACK_DIR, cleanup=cleanup)
 
         if config:
-            selected = config_store.get_config(config)
-            if selected is None:
-                error(f"No config named '{config}' found. Run `gozu init` to create one.")
-                raise typer.Exit(code=1)
-            configs = [selected]
+            configs = [resolve_config_or_prompt(config)]
         else:
             configs = config_store.list_configs()
             if not configs:

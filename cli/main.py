@@ -104,7 +104,11 @@ def _print_summary(summary: dict) -> None:
 @app.command()
 def run(
     config: str = typer.Option(
-        None, "--config", "-c", help="Name of the saved config to use (auto-selects it if you only have one)."
+        None,
+        "--config",
+        "-c",
+        help="Name of the saved config to use (auto-selects it if you only have one). A name that "
+        "doesn't match offers a picker of what actually exists instead of just failing.",
     ),
     watch: bool = typer.Option(
         False,
@@ -147,7 +151,8 @@ def up(
         "--config",
         "-c",
         help="Only start what this one saved config needs (still starts Postgres/Temporal/worker "
-        "regardless) - omit to start whatever every saved config needs, as before.",
+        "regardless) - omit to start whatever every saved config needs, as before. A name that "
+        "doesn't match offers a picker of what actually exists instead of just failing.",
     ),
 ) -> None:
     """
@@ -206,7 +211,11 @@ def config_list() -> None:
 
 
 @config_app.command("edit")
-def config_edit(name: str = typer.Argument(..., help="Name of the config to edit.")) -> None:
+def config_edit(
+    name: str = typer.Argument(
+        ..., help="Name of the config to edit. A name that doesn't match offers a picker of what actually exists."
+    ),
+) -> None:
     """
     Review and fix an existing config's values (SonarQube project key,
     branches, tokens, Jira details, ...) without recreating it from
@@ -217,7 +226,11 @@ def config_edit(name: str = typer.Argument(..., help="Name of the config to edit
 
 
 @config_app.command("delete")
-def config_delete(name: str = typer.Argument(..., help="Name of the config to delete.")) -> None:
+def config_delete(
+    name: str = typer.Argument(
+        ..., help="Name of the config to delete. A name that doesn't match offers a picker of what actually exists."
+    ),
+) -> None:
     """
     Permanently delete one saved config (a single yes/no confirmation,
     not --wipe's typed-word ritual - this only affects one config, not

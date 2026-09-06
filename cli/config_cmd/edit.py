@@ -16,6 +16,7 @@ import questionary
 import typer
 
 import config.store as config_store
+from cli.config_lookup import resolve_config_or_prompt
 from cli.init_wizard.jira_step import (
     prompt_jira_api_token,
     prompt_jira_email,
@@ -25,7 +26,7 @@ from cli.init_wizard.jira_step import (
 from cli.init_wizard.sonar_cloud import prompt_premium_branches, prompt_sonar_organization, prompt_sonar_token_cloud
 from cli.init_wizard.sonar_local import prompt_project_key, prompt_sonar_token_local
 from cli.prompts import ask_or_exit, generate_or_prompt_secret, prompt_text
-from cli.status import error, success, warning
+from cli.status import success, warning
 from cli.wizard_engine import WizardField, run_wizard
 
 # credentials keys resolved via a shared ticket_destination when one is
@@ -118,10 +119,11 @@ def _build_edit_fields(config: dict, state: dict) -> list[WizardField]:
 
 
 def edit_command(name: str) -> None:
-    config = config_store.get_config(name)
-    if config is None:
-        error(f"No config named '{name}' found. Run `gozu config list` to see what's available.")
-        raise typer.Exit(code=1)
+    config = resolve_config_or_prompt(name)
+    # Use the resolved config's own name from here on, not the (possibly
+    # wrong) `name` argument - resolve_config_or_prompt() may have picked
+    # a different config via its "did you mean" recovery picker.
+    name = config["name"]
 
     state: dict = {}
     fields = _build_edit_fields(config, state)
