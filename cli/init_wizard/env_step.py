@@ -6,8 +6,8 @@
 import questionary
 import typer
 
-from cli.init_wizard.prompts import ask_or_exit
 from cli.prerequisites import ensure_java, ensure_sonar_scanner
+from cli.prompts import ask_or_exit
 from cli.status import error, waiting
 from scripts.bootstrap_env import (
     DEFAULT_PORTS,

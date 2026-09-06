@@ -9,6 +9,7 @@ import time
 
 import typer
 
+from cli.config_cmd import delete_command, edit_command, list_command
 from cli.init_wizard import run_init_wizard
 from cli.scan_runner import run_scan_cycle, select_config
 from cli.stack import down as stack_down
@@ -27,6 +28,13 @@ app = typer.Typer(
     ),
     no_args_is_help=True,
 )
+
+config_app = typer.Typer(
+    name="config",
+    help="Manage saved configs after `gozu init` has created them - list what exists, fix a value without recreating one from scratch, or remove a throwaway config.",
+    no_args_is_help=True,
+)
+app.add_typer(config_app, name="config")
 
 
 def _version_callback(value: bool) -> None:
@@ -189,6 +197,34 @@ def ports() -> None:
     you'd expect - this is where to check.
     """
     stack_ports()
+
+
+@config_app.command("list")
+def config_list() -> None:
+    """List every saved config: name, scanner type/mode, and trigger mode - no secrets."""
+    list_command()
+
+
+@config_app.command("edit")
+def config_edit(name: str = typer.Argument(..., help="Name of the config to edit.")) -> None:
+    """
+    Review and fix an existing config's values (SonarQube project key,
+    branches, tokens, Jira details, ...) without recreating it from
+    scratch. scanner type/mode and trigger mode can't be changed here -
+    those are decided once at `gozu init` time.
+    """
+    edit_command(name)
+
+
+@config_app.command("delete")
+def config_delete(name: str = typer.Argument(..., help="Name of the config to delete.")) -> None:
+    """
+    Permanently delete one saved config (a single yes/no confirmation,
+    not --wipe's typed-word ritual - this only affects one config, not
+    the whole store). Never deletes a shared ticket destination this
+    config referenced, even if it was the last one using it.
+    """
+    delete_command(name)
 
 
 if __name__ == "__main__":

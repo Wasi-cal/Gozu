@@ -10,20 +10,21 @@ from pathlib import Path
 import questionary
 import requests
 
-from cli.init_wizard.prompts import ask_or_exit, generate_or_prompt_secret, prompt_text
+from cli.prompts import ask_or_exit, prompt_text
 from cli.stack.cleanup import InterruptCleanup
 from cli.stack.profiles import ensure_service_up
 from cli.status import error, success, waiting, warning
 
 
-def prompt_project_key() -> str:
+def prompt_project_key(default: str = "") -> str:
     """
     Required for every new config: `gozu run` needs it for both the
     sonar-scanner command and the issues-fetch API call, and unlike the old
     webhook path there's no incoming payload to pull it from anymore.
+    `default` lets `gozu config edit` prefill the current value.
     """
     while True:
-        key = prompt_text("SonarQube project key:", field="sonar_project_key").strip()
+        key = prompt_text("SonarQube project key:", field="sonar_project_key", default=default).strip()
         if key:
             return key
         error("Project key can't be empty.")
@@ -88,24 +89,25 @@ def _ensure_local_sonarqube(host_url: str, default_host: str, stack_dir: Path, c
     return True
 
 
-def collect_local_sonar(stack_dir: Path, cleanup: InterruptCleanup | None = None) -> tuple[dict[str, str], str, str]:
+def ensure_local_sonarqube_host(stack_dir: Path, cleanup: InterruptCleanup | None = None) -> str:
     """
-    Returns (credentials, trigger_mode, project_key). Local self-hosted
-    SonarQube is the backend the webhook receiver (receiver/app.py) already
-    exists for, so trigger_mode defaults to "webhook" here and a webhook
-    secret is collected to match receiver/verify_signature.py's HMAC check.
+    The structural, one-shot part of Local setup: resolve+confirm a
+    working SonarQube host URL, starting gozu's own managed instance if
+    needed. Returns just the host_url - deliberately NOT wrapped as a
+    cli/wizard_engine.py WizardField, since re-running this (with its real
+    Docker-start side effect) from a review screen would be a much bigger
+    operation than "correct a value" - this happens once, before the
+    field list is even built, same as it always has.
     """
     default_host = f"http://localhost:{os.environ.get('SONARQUBE_PORT', '9000')}"
     while True:
         host_url = prompt_text("SonarQube host URL:", default=default_host)
         if _ensure_local_sonarqube(host_url, default_host, stack_dir, cleanup):
-            break
+            return host_url
 
-    token = prompt_text("SonarQube token:", field="sonar_token_local")
-    project_key = prompt_project_key()
-    webhook_secret = generate_or_prompt_secret("Webhook secret")
-    credentials = {"sonar_host_url": host_url, "sonar_token": token, "webhook_secret": webhook_secret}
-    return credentials, "webhook", project_key
+
+def prompt_sonar_token_local(default: str = "") -> str:
+    return prompt_text("SonarQube token:", field="sonar_token_local", default=default)
 
 
 def select_scanner_mode() -> str:

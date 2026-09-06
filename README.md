@@ -33,6 +33,18 @@ Java/sonar-scanner (downloading portable copies into `~/.gozu/` if
 missing), and saves your scanner + Jira credentials as a named **config**
 in Postgres (encrypted at rest). Run it again to add more configs.
 
+Before saving, you'll see a review screen listing every answer you just
+gave (secrets masked to their last 4 characters) - pick any of them to
+correct it, or "Looks good - save" once everything looks right. Made a
+typo after `gozu init` already finished? `gozu config edit <name>` shows
+that same review screen again for an existing config, without needing to
+recreate it from scratch - see "Managing saved configs" below.
+
+`gozu status`/`gozu ports` are read-only checks - what's actually running
+right now, and which host port each service really landed on (`gozu
+init` auto-increments past whatever's already taken, so a service's real
+port can differ from its documented default).
+
 ## How a scan gets triggered
 
 Three ways, chosen per-config during `gozu init`:
@@ -181,11 +193,57 @@ Run `gozu init` a second time (a second repo, a second scanner config,
 whatever) and pick **Local or Cloud** as usual - when it gets to the Jira
 step, if a destination already exists you'll see "Use an existing ticket
 destination, or create a new one?" instead of being asked for a Jira
-URL/email/token again. Pick the existing one and the wizard skips straight
-to naming the config - zero Jira prompts. Both configs' tickets land on
-the same board, and dedupe (`ticket/claims.py`) still holds correctly
-across them, since it keys off the destination itself, not which config
-triggered the scan.
+URL/email/token again. Pick the existing one and there's nothing further
+to collect for it. Both configs' tickets land on the same board, and
+dedupe (`ticket/claims.py`) still holds correctly across them, since it
+keys off the destination itself, not which config triggered the scan.
+
+Creating a brand-new destination is deferred until you actually save on
+the final review screen (see "Managing saved configs" below) - answer its
+Jira URL/email/token/project key like any other field, keep editing other
+answers if you want, and the destination row only gets written to
+Postgres once you pick "Looks good - save". Nothing partial is left
+behind if you exit the wizard beforehand.
+
+Because a destination is shared, `gozu config edit` can later change its
+Jira credentials too - editing `jira_url`/`jira_email`/`jira_api_token`/
+`jira_project_key` on a config that uses a shared destination warns you
+how many *other* configs point at the same destination and asks for
+confirmation before writing, since the change isn't scoped to just the
+config you named.
+
+## Managing saved configs
+
+`gozu config` manages configs after `gozu init` has already created them,
+without needing to recreate one from scratch just to fix a value:
+
+```bash
+gozu config list                 # name, scanner type/mode, trigger mode - no secrets
+gozu config edit <name>          # fix a value on an existing config
+gozu config delete <name>        # permanently remove one config
+```
+
+`gozu config edit <name>` looks the config up, then shows the same
+review screen `gozu init` shows before its final save - every editable
+field listed with its current value (secrets masked to their last 4
+characters), pick one to correct it, "Looks good - save" once you're
+done. Only `project_key`, `branches`, the SonarQube token/organization,
+the webhook secret, and the Jira fields are offered - scanner
+type/mode, `sonar_plan`, and `trigger_mode` were decided once at `gozu
+init` time and can't be changed here. If nothing was actually changed,
+it says so and makes no writes at all; otherwise each changed field is
+written individually (`config/store.py`'s `update_config_fields()` for
+`project_key`/`branches`, `update_config_credential()` for everything
+else), with the shared-destination warning above surfacing first when it
+applies.
+
+`gozu config delete <name>` shows what it's about to delete (scanner
+type/mode, trigger mode, and whether its Jira credentials are embedded or
+a shared destination) before a single yes/no confirmation - not
+`--wipe`'s typed-word ritual, since this only ever touches one config's
+own rows (`config_credentials` cascades via its FK). It never deletes a
+referenced ticket destination, even if this was the last config using
+it - that's separate, out-of-scope surface for now.
 
 ## Development
 
