@@ -27,6 +27,7 @@ dependencies = [
 
 [project.scripts]
 gozu = "cli.main:app"
+gozu-github-action = "github_action.main:main"
 
 [tool.hatch.build.targets.wheel]
 include = [
@@ -38,4 +39,5 @@ include = [
     "cli/**",
     "scripts/**",
     "config/**",
+    "github_action/**",
 ]
