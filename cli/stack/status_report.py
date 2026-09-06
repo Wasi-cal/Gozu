@@ -1,22 +1,21 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
 
-"""`gozu up`'s own status summary - so knowing what's running never requires a separate `docker compose ps`/`docker ps` (and specifically surfaces "unhealthy" distinctly, not just "running")."""
+"""`gozu up`/`gozu status`'s shared status summary - so knowing what's running never requires a separate `docker compose ps`/`docker ps` (and specifically surfaces "unhealthy" distinctly, not just "running")."""
 
-import json
-import subprocess
 from pathlib import Path
 
 import typer
 
-from cli.stack.profiles import profile_flags
-from cli.status import ERROR, SUCCESS, WARNING, error
+from cli.stack.profiles import service_state, services_for_profiles
+from cli.status import ERROR, SUCCESS, WARNING
 
 
 def _status_symbol(state: str, health: str) -> str:
     """
     ✅ only for a genuinely good state (running, and healthy or no
-    healthcheck at all); ❌ for anything actually down (not running) OR
+    healthcheck at all); ❌ for anything actually down (not running -
+    including never created at all, which reports as state="") OR
     explicitly reported unhealthy - these are surfaced identically as
     failures since either one means "this isn't working right now",
     distinctly from ⚠️ "still starting, not confirmed either way yet".
@@ -31,21 +30,28 @@ def _status_symbol(state: str, health: str) -> str:
 
 
 def print_stack_status(stack_dir: Path, profiles: set[str]) -> None:
-    """Query docker compose directly (not the caller's own cached idea of what should be running) and print one line per container: status symbol, name, state/health, ports."""
-    command = ["docker", "compose", *profile_flags(profiles), "ps", "--all", "--format", "json"]
-    result = subprocess.run(command, capture_output=True, text=True, check=False, cwd=stack_dir)
-    if result.returncode != 0 or not result.stdout.strip():
-        error(f"Couldn't read stack status: {result.stderr.strip()}")
-        return
-
+    """
+    Looks up each expected service (services_for_profiles(profiles))
+    individually via service_state() - not one bulk `docker compose ps`
+    dump - specifically so a service that was never created at all (a
+    perfectly normal state: fresh after `gozu init`, or after `gozu down`)
+    still gets its own printed line (❌, "not created") instead of the
+    whole summary being skipped or treated as an error. Called both right
+    after `gozu up` brings things up, and standalone by `gozu status` at
+    any time, including when nothing has ever been started.
+    """
     typer.echo("\nStatus:")
-    for line in result.stdout.strip().splitlines():
-        container = json.loads(line)
-        service = container.get("Service", "?")
-        state = container.get("State", "")
-        health = container.get("Health", "")
-        ports = container.get("Ports", "") or "-"
+    for service in services_for_profiles(profiles):
+        state_dict = service_state(stack_dir, service) or {}
+        state = state_dict.get("State", "")
+        health = state_dict.get("Health", "")
+        ports = state_dict.get("Ports", "") or "-"
         symbol = _status_symbol(state, health)
 
-        status_text = state if not health else f"{state} ({health})"
+        if not state:
+            status_text = "not created"
+        elif health:
+            status_text = f"{state} ({health})"
+        else:
+            status_text = state
         typer.echo(f"  {symbol} {service:<12} {status_text:<22} {ports}")

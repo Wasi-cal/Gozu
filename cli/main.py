@@ -12,6 +12,8 @@ import typer
 from cli.init_wizard import run_init_wizard
 from cli.scan_runner import run_scan_cycle, select_config
 from cli.stack import down as stack_down
+from cli.stack import ports as stack_ports
+from cli.stack import status as stack_status
 from cli.stack import up as stack_up
 from cli.status import success, waiting
 from scripts.bootstrap_env import load_into_environ
@@ -156,6 +158,29 @@ def down(
     which deletes it all permanently.
     """
     stack_down(wipe)
+
+
+@app.command()
+def status() -> None:
+    """
+    Show the current state of every Docker service gozu manages (Postgres,
+    Temporal, SonarQube, worker, webhook receiver) - healthy, unhealthy,
+    starting, or not running - without starting or changing anything.
+    Safe to run any time, including before `gozu init`/`gozu up` have ever
+    run, or after `gozu down` has stopped everything.
+    """
+    stack_status()
+
+
+@app.command()
+def ports() -> None:
+    """
+    Show which host port each service actually resolved to. `gozu init`
+    auto-picks the next free port past each default when something else
+    is already using it, so a service's real port can differ from what
+    you'd expect - this is where to check.
+    """
+    stack_ports()
 
 
 if __name__ == "__main__":

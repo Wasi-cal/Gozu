@@ -78,7 +78,7 @@ def services_for_profiles(profiles: set[str]) -> list[str]:
     return services
 
 
-def _service_state(stack_dir: Path, service: str) -> dict | None:
+def service_state(stack_dir: Path, service: str) -> dict | None:
     """
     Compose's own record of `service`'s single container, or None if it's
     never been created at all. Confirmed live: `ps --all --format json
@@ -111,7 +111,7 @@ def is_service_up(stack_dir: Path, service: str) -> bool:
     False for anything else: never created, exited, or currently
     unhealthy/still starting.
     """
-    state = _service_state(stack_dir, service)
+    state = service_state(stack_dir, service)
     if state is None or state.get("State") != "running":
         return False
     return state.get("Health", "") in ("", "healthy")

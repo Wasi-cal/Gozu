@@ -16,6 +16,7 @@ import config.store as config_store
 from cli.stack.cleanup import InterruptCleanup
 from cli.stack.files import require_initialized
 from cli.stack.profiles import (
+    ALL_PROFILES,
     active_profiles,
     ensure_postgres_up,
     is_service_up,
@@ -27,7 +28,22 @@ from cli.stack.status_report import print_stack_status
 from cli.stack.webhooks import ensure_webhook_secrets, print_webhook_urls
 from cli.stack.wipe import confirm_and_wipe, gather_preview
 from cli.status import error, waiting, warning
+from scripts.env_ports import DEFAULT_PORTS, ENV_PATH, parse_env_file
 from scripts.paths import STACK_DIR
+
+# env var name -> human-readable label, for `gozu ports`. Iterated in
+# DEFAULT_PORTS's own order (the authoritative list of ports gozu itself
+# manages - see scripts/env_ports.py) rather than hand-maintained
+# separately, so a port added there can't silently go unlabeled here; an
+# unrecognized name (there shouldn't be one) falls back to itself as the
+# label rather than raising.
+_PORT_LABELS: dict[str, str] = {
+    "POSTGRES_PORT": "Postgres",
+    "SONARQUBE_PORT": "SonarQube",
+    "TEMPORAL_PORT": "Temporal (gRPC)",
+    "TEMPORAL_UI_PORT": "Temporal UI",
+    "RECEIVER_PORT": "Webhook receiver",
+}
 
 
 def up() -> None:
@@ -127,3 +143,40 @@ def down(wipe: bool = False) -> None:
         return
 
     confirm_and_wipe(profiles, len(configs), destinations_count, claims_count, wipes_sonarqube, STACK_DIR)
+
+
+def status() -> None:
+    """
+    Read-only status check: prints every service's current state (never
+    created / stopped / starting / healthy / unhealthy) without bringing
+    anything up - no ensure_*_up() call anywhere in this function, so it's
+    safe to run any time, including when nothing at all is running yet.
+
+    Uses ALL_PROFILES (every service gozu could ever manage), not just
+    the ones this machine's current configs happen to need - deliberately
+    doesn't read configs from Postgres to narrow that down, since
+    Postgres itself might be exactly the thing that's down right now, and
+    this command must still work in that case.
+    """
+    require_initialized()
+    print_stack_status(STACK_DIR, ALL_PROFILES)
+
+
+def ports() -> None:
+    """
+    Prints the real host-side port each service resolved to, straight
+    from ~/.gozu/stack/.env - bootstrap_env.py auto-increments past
+    whatever's already taken on this machine at `gozu init` time, so a
+    service's actual port can differ from its documented default (e.g.
+    SonarQube landing on 9001 because something else already had 9000).
+    """
+    require_initialized()
+    values = parse_env_file(ENV_PATH)
+    typer.echo("Ports:")
+    for name in DEFAULT_PORTS:
+        label = _PORT_LABELS.get(name, name)
+        port = values.get(name)
+        if port:
+            typer.echo(f"  {label:<20} {port}")
+        else:
+            warning(f"  {label:<20} not set in .env")
