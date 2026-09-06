@@ -11,6 +11,7 @@ from typing import Any
 import requests
 from temporalio import activity
 
+from core.errors import TicketAuthError, TicketValidationError
 from core.models import Finding, Severity
 from ticket.adf import bullet_list, code_block, doc, paragraph
 from ticket.base import (
@@ -45,11 +46,20 @@ class JiraClient(TicketClient):
     def destination_id(self) -> str:
         return f"jira:{self.base_url}:{self.project_key}"
 
-    def _raise_for_status(self, response: requests.Response, action: str):
-        if not (200 <= response.status_code < 300):
-            raise RuntimeError(
-                f"Jira {action} failed with status {response.status_code}: {response.text}"
-            )
+    def _raise_for_status(self, response: requests.Response, action: str) -> None:
+        """
+        Shared by every Jira call this client makes - one place to
+        distinguish permanent failures (never worth retrying) from
+        everything else (404s, 429s, 5xxs, left as a generic RuntimeError,
+        same retryable path as before this existed).
+        """
+        if 200 <= response.status_code < 300:
+            return
+        if response.status_code in (401, 403):
+            raise TicketAuthError(f"Jira {action} failed with status {response.status_code} (invalid/expired token?): {response.text}")
+        if response.status_code == 400:
+            raise TicketValidationError(f"Jira {action} failed with status {response.status_code}: {response.text}")
+        raise RuntimeError(f"Jira {action} failed with status {response.status_code}: {response.text}")
 
     def _find_by_label(self, label: str) -> str | None:
         """Search for a Jira ticket tagged with `label` in this project. Returns the issue key (e.g. "PROJ-123") if found, else None."""

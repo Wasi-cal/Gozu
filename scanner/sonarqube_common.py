@@ -14,6 +14,7 @@ for why /api/hotspots/search isn't used and how a result is classified.
 import requests
 from temporalio import activity
 
+from core.errors import ScannerAuthError
 from core.models import Finding, Severity
 from scanner.base import DEFAULT_SEVERITY, SONAR_SEVERITY_MAP
 from scanner.sonarqube_classify import FORMER_HOTSPOT_TAG, is_security_relevant
@@ -101,6 +102,10 @@ class SonarQubeIssueFetcher:
                 params={**params, **self._extra_params(), "p": page, "ps": _PAGE_SIZE},
                 auth=self._auth(),
             )
+            if response.status_code in (401, 403):
+                raise ScannerAuthError(
+                    f"SonarQube issues/search failed with status {response.status_code} (invalid/expired token?): {response.text}"
+                )
             if response.status_code != 200:
                 raise RuntimeError(f"SonarQube issues/search failed with status {response.status_code}: {response.text}")
 

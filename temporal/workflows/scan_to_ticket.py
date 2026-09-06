@@ -54,8 +54,16 @@ class ScanToTicketWorkflow:
             # create_tickets_activity below) looks identical over the API to
             # "not indexed yet" (both 404 "Project not found"). More
             # attempts + a longer initial backoff than the default gives
-            # that indexing lag room to resolve before giving up for real.
-            retry_policy=RetryPolicy(initial_interval=timedelta(seconds=2), maximum_attempts=8),
+            # that indexing lag room to resolve before giving up for real -
+            # unchanged by non_retryable_error_types below, which only ever
+            # stops retrying a ScannerAuthError (an invalid/expired token -
+            # genuinely permanent, no amount of waiting fixes it), never a
+            # 404 - that stays on the retryable path exactly as before.
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=2),
+                maximum_attempts=8,
+                non_retryable_error_types=["ScannerAuthError"],
+            ),
         )
 
         workflow.logger.info(
@@ -71,7 +79,15 @@ class ScanToTicketWorkflow:
             create_tickets_activity,
             CreateTicketsInput(findings=findings, ticket_backend=input.ticket_backend, credentials=input.credentials),
             start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=RetryPolicy(maximum_attempts=3),
+            # TicketAuthError (invalid/expired Jira token) and
+            # TicketValidationError (a permanently malformed request - bad
+            # project key, invalid issue type/field) never get fixed by
+            # retrying; everything else (404s, 429s, 5xxs, timeouts) stays
+            # on the normal retryable path, unchanged.
+            retry_policy=RetryPolicy(
+                maximum_attempts=3,
+                non_retryable_error_types=["TicketAuthError", "TicketValidationError"],
+            ),
         )
 
         workflow.logger.info(
