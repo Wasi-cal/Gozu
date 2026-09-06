@@ -48,6 +48,17 @@ async def reconcile_resolved_findings_activity(input: ReconcileResolvedFindingsI
     on, same "one bad item can't sink the batch" rule this codebase already
     applies to sprint assignment (ticket/jira_sprint.py) and the rollup
     ticket (create_tickets_activity).
+
+    Also confirmed live: a ticket deleted directly in Jira for a finding
+    SonarQube still considers OPEN was never caught here at all - the old
+    code fetched resolutions FIRST and returned early when nothing was
+    resolved, so a still-open finding's now-nonexistent ticket was never
+    even looked at. Existence is now checked for every open claim up
+    front, independent of SonarQube resolution status - a confirmed-gone
+    ticket gets its stale claim cleared (claims.clear_stale()) regardless
+    of whether the finding is resolved or still open, so it isn't
+    permanently stuck "already ticketed" with no real ticket behind it;
+    only the survivors go on to the resolution-based auto-close check.
     """
     scanner_client = (
         build_scanner_client(input.scanner_type, input.scanner_mode, input.credentials)
@@ -60,10 +71,7 @@ async def reconcile_resolved_findings_activity(input: ReconcileResolvedFindingsI
     destination = ticket_client.destination_id()
 
     transition_to_done = getattr(ticket_client, "transition_to_done", None)
-    if transition_to_done is None:
-        activity.logger.warning(f"{input.ticket_backend} doesn't support transitions - skipping auto-close")
-        return []
-
+    ticket_exists = getattr(ticket_client, "ticket_exists", None)
     add_comment = getattr(ticket_client, "add_comment", None)
     closed: list[str] = []
 
@@ -72,9 +80,35 @@ async def reconcile_resolved_findings_activity(input: ReconcileResolvedFindingsI
         if not open_claims:
             return []
 
+        if ticket_exists is not None:
+            still_open_claims = []
+            for row in open_claims:
+                try:
+                    if ticket_exists(row["ticket_key"]):
+                        still_open_claims.append(row)
+                        continue
+                    activity.logger.warning(
+                        f"Ticket {row['ticket_key']} for finding {row['finding_key']} no longer exists in "
+                        f"{input.ticket_backend} (deleted outside gozu?) - clearing the stale claim"
+                    )
+                    claims.clear_stale(conn, destination, row["finding_key"])
+                except Exception as e:
+                    # Existence-check itself failed (network blip, auth
+                    # hiccup) - treat conservatively as still-open rather
+                    # than risk clearing a perfectly good claim on a
+                    # transient error.
+                    activity.logger.warning(f"Couldn't verify {row['ticket_key']} still exists, leaving it open: {e}")
+                    still_open_claims.append(row)
+            open_claims = still_open_claims
+
+        if not open_claims or transition_to_done is None:
+            if transition_to_done is None:
+                activity.logger.warning(f"{input.ticket_backend} doesn't support transitions - skipping auto-close")
+            return closed
+
         resolutions = scanner_client.fetch_resolutions([row["finding_key"] for row in open_claims])
         if not resolutions:
-            return []
+            return closed
 
         for row in open_claims:
             finding_key = row["finding_key"]

@@ -133,3 +133,23 @@ def mark_closed(conn: psycopg.Connection[dict[str, Any]], destination: str, find
             (destination, finding_key),
         )
     conn.commit()
+
+
+def clear_stale(conn: psycopg.Connection[dict[str, Any]], destination: str, finding_key: str) -> None:
+    """
+    Remove a claim whose ticket_key was verified to no longer exist in the
+    ticket backend (deleted directly there, outside gozu - see
+    create_tickets_activity's ticket_exists() check). Distinct from
+    release(): that one only ever clears an in-progress claim (ticket_key
+    IS NULL); this one is specifically for a *completed* claim whose
+    ticket has since vanished out from under the ledger, so it has no
+    ticket_key guard - deleting the row lets the very next claim() for
+    this finding succeed instead of permanently seeing a stale claim it
+    can never win past.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM ticket_claims WHERE destination = %s AND finding_key = %s",
+            (destination, finding_key),
+        )
+    conn.commit()

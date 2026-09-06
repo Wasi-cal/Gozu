@@ -36,6 +36,7 @@ async def create_tickets_activity(input: CreateTicketsInput) -> TicketResult:
         build_ticket_client(input.ticket_backend, input.credentials) if input.credentials else get_ticket_client()
     )
     destination = client.destination_id()
+    ticket_exists = getattr(client, "ticket_exists", None)
 
     created = []
     skipped = []
@@ -51,8 +52,21 @@ async def create_tickets_activity(input: CreateTicketsInput) -> TicketResult:
         for finding in input.findings:
             ledger_ticket = claims.get_ticket(conn, destination, finding.key)
             if ledger_ticket:
-                skipped.append(finding.key)
-                continue
+                # The ledger's ticket_key is trusted blindly UNLESS the
+                # backend can cheaply confirm it's still real - a ticket
+                # deleted directly in Jira (outside gozu entirely) leaves
+                # this row pointing at nothing, permanently "skipping" a
+                # finding that in fact has no ticket at all. Verified
+                # False -> the claim is cleared and this finding falls
+                # through to the normal claim+create path below, same run.
+                if ticket_exists is None or ticket_exists(ledger_ticket):
+                    skipped.append(finding.key)
+                    continue
+                activity.logger.warning(
+                    f"Ticket {ledger_ticket} for finding {finding.key} no longer exists in "
+                    f"{input.ticket_backend} (deleted outside gozu?) - clearing the stale claim"
+                )
+                claims.clear_stale(conn, destination, finding.key)
 
             if processed_new_count >= BACKLOG_CAP:
                 # Not claimed - this finding is genuinely untouched, so a

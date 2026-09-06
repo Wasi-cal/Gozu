@@ -61,6 +61,25 @@ class JiraClient(TicketClient):
             raise TicketValidationError(f"Jira {action} failed with status {response.status_code}: {response.text}")
         raise RuntimeError(f"Jira {action} failed with status {response.status_code}: {response.text}")
 
+    def ticket_exists(self, ticket_key: str) -> bool:
+        """
+        Whether `ticket_key` still exists in Jira - True on a normal GET,
+        False specifically on 404 (deleted, or never existed). Any other
+        non-2xx (401/403/429/5xx/...) still raises via _raise_for_status()
+        rather than being treated as "gone" - a transient/auth failure
+        must never be misread as evidence the ticket was deleted.
+        """
+        response = requests.get(
+            f"{self.base_url}/rest/api/3/issue/{ticket_key}",
+            params={"fields": "key"},
+            auth=self.auth,
+            headers=self.headers,
+        )
+        if response.status_code == 404:
+            return False
+        self._raise_for_status(response, "get issue")
+        return True
+
     def _find_by_label(self, label: str) -> str | None:
         """Search for a Jira ticket tagged with `label` in this project. Returns the issue key (e.g. "PROJ-123") if found, else None."""
         jql = f'project = {self.project_key} AND labels = "{label}"'
