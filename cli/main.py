@@ -12,6 +12,7 @@ from cli.init_wizard import run_init_wizard
 from cli.scan_runner import run_scan_cycle, select_config
 from cli.stack import down as stack_down
 from cli.stack import up as stack_up
+from cli.status import success, waiting
 from scripts.bootstrap_env import load_into_environ
 
 app = typer.Typer(
@@ -40,11 +41,9 @@ def init() -> None:
 def _print_summary(summary: dict) -> None:
     created = summary["created"]
     skipped = summary["skipped"]
-    typer.secho(
+    success(
         f"Done: created {len(created)} ticket(s), skipped {len(skipped)} already-ticketed finding(s) "
-        f"(SonarQube task {summary['ce_task_id']})",
-        fg=typer.colors.GREEN,
-        bold=True,
+        f"(SonarQube task {summary['ce_task_id']})"
     )
     for entry in created:
         typer.echo(f"  created {entry['ticket_key']} for finding {entry['finding_key']}")
@@ -67,7 +66,7 @@ def run(
         _print_summary(summary)
         return
 
-    typer.echo(f"Watching every {interval}s - Ctrl+C to stop.")
+    waiting(f"Watching every {interval}s - Ctrl+C to stop.")
     try:
         while True:
             summary = run_scan_cycle(selected, path)

@@ -12,6 +12,7 @@ import typer
 import config.store as config_store
 from cli.stack.backup import create_backup, next_backup_path
 from cli.stack.profiles import ensure_postgres_up, profile_flags
+from cli.status import success, waiting, warning
 
 
 def gather_preview(profiles: set[str]) -> tuple[int, int, bool]:
@@ -39,38 +40,32 @@ def confirm_and_wipe(
 ) -> None:
     backup_target = next_backup_path()
 
-    typer.secho("\nThis will PERMANENTLY delete:", fg=typer.colors.RED, bold=True)
+    warning("This will PERMANENTLY delete:")
     typer.echo(f"  {configs_count} config(s)")
     typer.echo(f"  {destinations_count} ticket destination(s)")
     typer.echo(f"  {claims_count} dedupe claim(s) (ticket_claims)")
     if wipes_sonarqube:
-        typer.secho(
-            "  local SonarQube's scan history/volume too - sonarqube-local is an active profile this run",
-            fg=typer.colors.RED,
-        )
+        warning("  local SonarQube's scan history/volume too - sonarqube-local is an active profile this run")
     else:
         typer.echo("  (local SonarQube's volume will NOT be touched - sonarqube-local isn't an active profile)")
     typer.echo(f"\nA Postgres backup will be written to {backup_target} before anything is deleted.")
 
     answer = questionary.text("\nType 'wipe' to confirm - anything else cancels:").ask()
     if answer != "wipe":
-        typer.secho(
-            f"Cancelled ({answer!r} != 'wipe') - nothing was deleted; the stack is stopped, not wiped.",
-            fg=typer.colors.YELLOW,
-        )
+        warning(f"Cancelled ({answer!r} != 'wipe') - nothing was deleted; the stack is stopped, not wiped.")
         return
 
     # down() already stopped postgres as part of the plain-stop step above -
     # briefly bring it back so pg_dump has something to actually connect to;
     # the docker compose down -v below removes it for real either way.
     ensure_postgres_up(stack_dir)
-    typer.echo("Backing up Postgres before wiping ...")
+    waiting("Backing up Postgres before wiping ...")
     create_backup(backup_target, stack_dir)
-    typer.secho(f"Backup written: {backup_target}", fg=typer.colors.GREEN)
+    success(f"Backup written: {backup_target}")
 
     command = ["docker", "compose", *profile_flags(profiles), "down", "-v"]
-    typer.echo("Running: " + " ".join(command))
+    waiting("Running: " + " ".join(command))
     result = subprocess.run(command, check=False, cwd=stack_dir)
     if result.returncode != 0:
         raise typer.Exit(code=result.returncode)
-    typer.secho("Stack wiped - configs, ticket destinations, dedupe claims, and volumes are gone.", fg=typer.colors.RED)
+    warning("Stack wiped - configs, ticket destinations, dedupe claims, and volumes are gone.")

@@ -13,6 +13,7 @@ import typer
 
 import config.store as config_store
 from cli.init_wizard.prompts import ask_or_exit, prompt_text
+from cli.status import error
 
 _CREATE_NEW = "__create_new__"
 
@@ -22,10 +23,10 @@ def _prompt_destination_name() -> str:
     while True:
         name = ask_or_exit(questionary.text("Name this ticket destination:")).strip()
         if not name:
-            typer.secho("Name can't be empty.", fg=typer.colors.RED)
+            error("Name can't be empty.")
             continue
         if name in existing_names:
-            typer.secho(f"A ticket destination named '{name}' already exists - choose another name.", fg=typer.colors.RED)
+            error(f"A ticket destination named '{name}' already exists - choose another name.")
             continue
         return name
 

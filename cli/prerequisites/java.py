@@ -19,6 +19,7 @@ from cli.prerequisites.archive import (
     os_name,
     verify_runnable,
 )
+from cli.status import success, waiting
 from scripts.paths import GOZU_HOME
 
 JRE_DIR = GOZU_HOME / "jre"
@@ -74,7 +75,7 @@ def ensure_java() -> Path:
     typer.echo("sonar-scanner needs a Java runtime (JVM), and none was found on this machine.")
     os_label = os_name({"Darwin": "mac", "Linux": "linux", "Windows": "windows"})
     arch = arch_name()
-    typer.echo(f"Downloading a portable Eclipse Temurin JRE ({os_label}/{arch}) into {JRE_DIR} ...")
+    waiting(f"Downloading a portable Eclipse Temurin JRE ({os_label}/{arch}) into {JRE_DIR} ...")
 
     url = (
         f"https://api.adoptium.net/v3/binary/latest/{_ADOPTIUM_FEATURE_VERSION}/ga/"
@@ -93,7 +94,7 @@ def ensure_java() -> Path:
     make_tree_executable(JRE_DIR)
     verify_runnable(java_bin, "-version")
 
-    typer.secho(f"Java runtime ready: {java_bin}", fg=typer.colors.GREEN)
+    success(f"Java runtime ready: {java_bin}")
     return java_bin
 
 

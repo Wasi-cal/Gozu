@@ -10,6 +10,7 @@ import typer
 from cli.help_links import print_help_link
 from cli.init_wizard.prompts import ask_or_exit, generate_or_prompt_secret, prompt_text
 from cli.init_wizard.sonar_local import prompt_project_key
+from cli.status import error, warning
 
 FREE_PLAN_WARNING = (
     "SonarQube Cloud's Free plan only analyzes pull requests once they're merged to main - "
@@ -27,10 +28,11 @@ def _collect_cloud_free() -> tuple[str, str, str]:
     `gozu run --watch` - so trigger_mode is set directly, no select
     prompt for it.
     """
-    typer.secho(f"\n{FREE_PLAN_WARNING}", fg=typer.colors.YELLOW, bold=True)
+    typer.echo()
+    warning(FREE_PLAN_WARNING)
     understood = ask_or_exit(questionary.confirm("I understand", default=False))
     if not understood:
-        typer.secho("Aborting - Free plan requires acknowledging this limitation to continue.", fg=typer.colors.RED)
+        error("Aborting - Free plan requires acknowledging this limitation to continue.")
         raise typer.Exit(code=1)
 
     branch = prompt_text("Target branch to track:", default="main").strip() or "main"

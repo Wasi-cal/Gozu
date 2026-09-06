@@ -13,6 +13,7 @@ import questionary
 import typer
 
 from cli.help_links import print_help_link
+from cli.status import warning
 
 
 def ask_or_exit(question: questionary.Question) -> str:
@@ -34,6 +35,6 @@ def generate_or_prompt_secret(label: str) -> str:
     if secret:
         return secret
     generated = secrets.token_urlsafe(32)
-    typer.secho(f"Generated: {generated}", fg=typer.colors.YELLOW)
+    warning(f"Generated: {generated}")
     typer.secho("(shown once - it's stored encrypted, this is your only chance to copy it elsewhere)", dim=True)
     return generated
