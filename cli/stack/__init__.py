@@ -46,13 +46,23 @@ _PORT_LABELS: dict[str, str] = {
 }
 
 
-def up() -> None:
+def up(config: str | None = None) -> None:
     """
     Brings up Postgres (needed just to read configs), then every
     always-on/profile-active service in one `docker compose up -d`.
     Wrapped in InterruptCleanup (cli/stack/cleanup.py) so a Ctrl-C/SIGTERM
     partway through only tears down what THIS invocation itself started -
     whatever was already up and healthy before this ran is left untouched.
+
+    `config`, when given, scopes profile activation to that one config
+    instead of the aggregate-across-everything default: active_profiles()
+    (cli/stack/profiles.py) already just takes whatever list of config
+    dicts it's handed, so a single-element list here is enough - no
+    change needed there. Always-on services (postgres/temporal/worker)
+    start either way; only which OPTIONAL profiles (sonarqube-local,
+    webhook) activate is affected, and the post-up webhook-URL summary
+    below reflects only the selected config too, not every webhook-mode
+    config in the store.
     """
     require_initialized()
 
@@ -66,9 +76,16 @@ def up() -> None:
         waiting("Bringing up Postgres ...")
         ensure_postgres_up(STACK_DIR, cleanup=cleanup)
 
-        configs = config_store.list_configs()
-        if not configs:
-            warning("No configs found - run `gozu init` first. Bringing up always-on services only.")
+        if config:
+            selected = config_store.get_config(config)
+            if selected is None:
+                error(f"No config named '{config}' found. Run `gozu init` to create one.")
+                raise typer.Exit(code=1)
+            configs = [selected]
+        else:
+            configs = config_store.list_configs()
+            if not configs:
+                warning("No configs found - run `gozu init` first. Bringing up always-on services only.")
 
         profiles = active_profiles(configs)
 

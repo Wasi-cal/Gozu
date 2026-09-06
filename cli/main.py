@@ -133,14 +133,22 @@ def run(
 
 
 @app.command()
-def up() -> None:
+def up(
+    config: str = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Only start what this one saved config needs (still starts Postgres/Temporal/worker "
+        "regardless) - omit to start whatever every saved config needs, as before.",
+    ),
+) -> None:
     """
     Start the local Docker services gozu needs: Postgres and Temporal
     always, plus SonarQube and/or the webhook receiver if one of your
     configs actually needs them. Run this before `gozu run`, and prints a
     status summary of every service once it's done.
     """
-    stack_up()
+    stack_up(config)
 
 
 @app.command()
