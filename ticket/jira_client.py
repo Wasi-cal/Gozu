@@ -21,6 +21,18 @@ from ticket.base import (
 )
 from ticket.jira_sprint import SprintAssigner
 
+# Distinct from the per-finding "source-key-{key}" labels - identifies the
+# one shared backlog-rollup ticket a project can have (see
+# upsert_rollup_ticket()), so it can be found again on a later run instead
+# of creating a second one.
+ROLLUP_LABEL = "gozu-backlog-rollup"
+
+# How many of the deferred findings' keys/rules/severities to actually
+# list in the rollup ticket's description before summarizing the rest -
+# a genuinely large backlog (hundreds of findings) would make for an
+# unreadable ticket body otherwise.
+_ROLLUP_DESCRIPTION_MAX_LINES = 50
+
 
 class JiraClient(TicketClient):
     def __init__(self, base_url: str, email: str, api_token: str, project_key: str):
@@ -39,12 +51,8 @@ class JiraClient(TicketClient):
                 f"Jira {action} failed with status {response.status_code}: {response.text}"
             )
 
-    def find_existing(self, finding_key: str) -> str | None:
-        """
-        Search for a Jira ticket already tagged with the source-key-{key}
-        label. Returns the issue key (e.g. "PROJ-123") if found, else None.
-        """
-        label = f"source-key-{finding_key}"
+    def _find_by_label(self, label: str) -> str | None:
+        """Search for a Jira ticket tagged with `label` in this project. Returns the issue key (e.g. "PROJ-123") if found, else None."""
         jql = f'project = {self.project_key} AND labels = "{label}"'
 
         params: dict[str, Any] = {"jql": jql, "fields": "key", "maxResults": 1}
@@ -58,6 +66,10 @@ class JiraClient(TicketClient):
 
         issues = response.json().get("issues", [])
         return issues[0]["key"] if issues else None
+
+    def find_existing(self, finding_key: str) -> str | None:
+        """Already-ticketed finding? (dedupe) - source-key-{key} is stamped on every per-finding ticket at creation."""
+        return self._find_by_label(f"source-key-{finding_key}")
 
     def _map_priority(self, severity: Severity) -> str:
         return SEVERITY_TO_PRIORITY.get(severity, DEFAULT_PRIORITY)
@@ -158,3 +170,108 @@ class JiraClient(TicketClient):
             headers=self.headers,
         )
         self._raise_for_status(response, "add comment")
+
+    def get_transitions(self, issue_key: str) -> list[dict[str, Any]]:
+        """Every transition currently available on `issue_key`, in whatever workflow this project actually uses."""
+        response = requests.get(
+            f"{self.base_url}/rest/api/3/issue/{issue_key}/transitions",
+            auth=self.auth,
+            headers=self.headers,
+        )
+        self._raise_for_status(response, "get transitions")
+        return response.json().get("transitions", [])
+
+    def transition_to_done(self, issue_key: str) -> bool:
+        """
+        Move `issue_key` to whichever available transition leads to a
+        "done"-category status - workflows vary per project, so this
+        deliberately never hardcodes a status name like "Done"/"Closed",
+        only the statusCategory.key Jira itself guarantees. Returns False
+        (and does nothing) if no such transition is currently available,
+        rather than guessing at the wrong one.
+        """
+        for transition in self.get_transitions(issue_key):
+            if transition.get("to", {}).get("statusCategory", {}).get("key") != "done":
+                continue
+            response = requests.post(
+                f"{self.base_url}/rest/api/3/issue/{issue_key}/transitions",
+                json={"transition": {"id": transition["id"]}},
+                auth=self.auth,
+                headers=self.headers,
+            )
+            self._raise_for_status(response, "transition issue")
+            return True
+        return False
+
+    def _update_ticket(self, issue_key: str, summary: str, description: dict) -> None:
+        payload = {"fields": {"summary": summary, "description": description}}
+        response = requests.put(
+            f"{self.base_url}/rest/api/3/issue/{issue_key}",
+            json=payload,
+            auth=self.auth,
+            headers=self.headers,
+        )
+        self._raise_for_status(response, "update issue")
+
+    def _build_rollup_summary(self, count: int) -> str:
+        return f"SonarQube backlog: {count} additional finding(s) not yet ticketed"
+
+    def _build_rollup_description(self, remaining: list[Finding]) -> dict:
+        lines = [
+            f"{finding.key} - {finding.finding_type} - {finding.severity.value} - {finding.title}"
+            for finding in remaining[:_ROLLUP_DESCRIPTION_MAX_LINES]
+        ]
+        if len(remaining) > _ROLLUP_DESCRIPTION_MAX_LINES:
+            lines.append(f"... and {len(remaining) - _ROLLUP_DESCRIPTION_MAX_LINES} more")
+
+        return doc(
+            paragraph(
+                "These findings were detected but not individually ticketed this run "
+                "(per-run backlog cap reached) - they'll get their own ticket automatically "
+                "in a future run as capacity frees up."
+            ),
+            bullet_list(lines),
+        )
+
+    def upsert_rollup_ticket(self, remaining: list[Finding]) -> str | None:
+        """
+        One shared ticket for however many findings didn't get their own
+        this run (see create_tickets_activity's BACKLOG_CAP) - never one
+        ticket per remaining finding. Checked by ROLLUP_LABEL every call:
+        an existing rollup ticket gets its summary/description updated in
+        place (count included) rather than a new one created alongside it
+        - --watch/webhook mode re-runs this every cycle against what's
+        likely the same persistent backlog, so this must never spam a new
+        "N more findings" ticket per run. `remaining` empty with an
+        existing rollup ticket still updates it (down to 0), reflecting
+        the backlog actually shrinking; empty with no existing ticket is a
+        no-op - nothing to create for a backlog that isn't there.
+        """
+        existing = self._find_by_label(ROLLUP_LABEL)
+        if not remaining and existing is None:
+            return None
+
+        summary = self._build_rollup_summary(len(remaining))
+        description = self._build_rollup_description(remaining)
+
+        if existing is not None:
+            self._update_ticket(existing, summary=summary, description=description)
+            return existing
+
+        payload: dict[str, Any] = {
+            "fields": {
+                "project": {"key": self.project_key},
+                "summary": summary,
+                "issuetype": {"name": "Task"},
+                "labels": ["sonarqube", ROLLUP_LABEL],
+                "description": description,
+            }
+        }
+        response = requests.post(
+            f"{self.base_url}/rest/api/3/issue",
+            json=payload,
+            auth=self.auth,
+            headers=self.headers,
+        )
+        self._raise_for_status(response, "create rollup issue")
+        return response.json()["key"]

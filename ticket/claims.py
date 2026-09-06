@@ -106,3 +106,30 @@ def release(conn: psycopg.Connection[dict[str, Any]], destination: str, finding_
             (destination, finding_key),
         )
     conn.commit()
+
+
+def list_open(conn: psycopg.Connection[dict[str, Any]], destination: str) -> list[dict[str, str]]:
+    """
+    Every claim on `destination` with a real ticket_key that hasn't been
+    marked closed yet - the candidates reconcile_resolved_findings_activity
+    batch-checks against the scanner each run. Excludes in-progress claims
+    (ticket_key IS NULL) - nothing to reconcile for a finding that doesn't
+    have a ticket yet.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT finding_key, ticket_key FROM ticket_claims "
+            "WHERE destination = %s AND status = 'open' AND ticket_key IS NOT NULL",
+            (destination,),
+        )
+        return cur.fetchall()
+
+
+def mark_closed(conn: psycopg.Connection[dict[str, Any]], destination: str, finding_key: str) -> None:
+    """Record that this claim's ticket was auto-closed - list_open() won't surface it again."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ticket_claims SET status = 'closed' WHERE destination = %s AND finding_key = %s",
+            (destination, finding_key),
+        )
+    conn.commit()

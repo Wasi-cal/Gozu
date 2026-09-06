@@ -49,8 +49,11 @@ class TicketClient(ABC):
         """Create a ticket for a finding, return the new ticket's key."""
         raise NotImplementedError
 
-    # attach_screenshot()/add_comment() are deliberately NOT part of this
-    # contract - they're optional, backend-specific bonus capabilities
-    # (see jira_client.py). Callers use getattr(client, name, None) to
-    # detect support rather than calling them directly (see
-    # temporal/activities/capture_and_attach_screenshot.py).
+    # attach_screenshot()/add_comment()/transition_to_done()/
+    # upsert_rollup_ticket() are deliberately NOT part of this contract -
+    # they're optional, backend-specific bonus capabilities (see
+    # jira_client.py). Callers use getattr(client, name, None) to detect
+    # support rather than calling them directly (see
+    # temporal/activities/capture_and_attach_screenshot.py,
+    # temporal/activities/reconcile_resolved_findings.py, and
+    # temporal/activities/create_tickets.py's backlog rollup).

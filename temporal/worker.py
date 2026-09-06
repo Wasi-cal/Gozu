@@ -16,6 +16,9 @@ from temporal.activities.capture_and_attach_screenshot import (
 )
 from temporal.activities.create_tickets import create_tickets_activity
 from temporal.activities.fetch_findings import fetch_findings_activity
+from temporal.activities.reconcile_resolved_findings import (
+    reconcile_resolved_findings_activity,
+)
 from temporal.data_converter import DATA_CONVERTER, TASK_QUEUE
 from temporal.workflows.multi_branch_scan import MultiBranchScanWorkflow
 from temporal.workflows.scan_to_ticket import ScanToTicketWorkflow
@@ -35,6 +38,7 @@ async def main():
             fetch_findings_activity,
             create_tickets_activity,
             capture_and_attach_screenshot_activity,
+            reconcile_resolved_findings_activity,
         ],
     )
 

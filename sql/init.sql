@@ -126,3 +126,13 @@ CREATE TABLE IF NOT EXISTS ticket_claims (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (destination, finding_key)
 );
+
+-- Migration: whether a claim's ticket has since been auto-closed (see
+-- ticket/claims.py's list_open()/mark_closed(), and
+-- temporal/activities/reconcile_resolved_findings.py, which checks every
+-- 'open' claim against the scanner each run and flips one to 'closed'
+-- once SonarQube reports the underlying finding resolved). Every existing
+-- row defaults to 'open' - nothing already in this ledger should
+-- retroactively look closed the moment this migration runs; it only ever
+-- moves open -> closed going forward, from real scanner state.
+ALTER TABLE ticket_claims ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'open';

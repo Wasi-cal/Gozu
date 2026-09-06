@@ -11,8 +11,9 @@ Working name for the CLI/product; the repo directory is still called
 
 1. Code gets scanned (either you run `gozu run`, or SonarQube fires a webhook after its own analysis).
 2. A Temporal workflow fetches open findings from SonarQube.
-3. For each finding without an existing ticket (deduped by a Jira label), a ticket is created and dropped into the project's active sprint.
+3. For each finding without an existing ticket (deduped by a Jira label), a ticket is created and dropped into the project's active sprint - up to 30 new tickets per run; anything past that goes into one shared rollup ticket instead (see "Backlog cap" below).
 4. A screenshot of the flagged code in the SonarQube UI is captured and attached to the new ticket, along with an extracted code snippet as a comment.
+5. Any ticket whose underlying finding SonarQube now reports resolved gets automatically transitioned to done and commented on (see "Auto-closing resolved findings" below) - same run, not a separate step you have to trigger.
 
 Everything runs locally via Docker Compose - Postgres (config storage),
 Temporal, and optionally a local SonarQube. Jira is the only piece that has
@@ -48,6 +49,44 @@ starts one child workflow per branch under a parent
 child workflows. A webhook delivery only ever concerns one branch, so it
 never needs to fan out - the branch list just gates which deliveries proceed.
 
+## Auto-closing resolved findings
+
+On by default for every config, no setting to turn it off - every scan
+cycle, alongside ticket creation (not a separate trigger you have to run),
+gozu checks every ticket it's still tracking as open against SonarQube's
+current view of the underlying finding. If SonarQube now reports one of
+these resolutions instead of open/reopened:
+
+- **Fixed** - the underlying code issue was actually fixed
+- **Won't Fix** - marked as intentionally not going to be fixed
+- **False Positive** - marked as not a real issue
+- **Removed** - the issue no longer applies (e.g. the file/rule is gone)
+
+...the ticket gets moved to whatever transition in its own Jira workflow
+leads to a "done"-category status (gozu never assumes a fixed status name
+like "Done"/"Closed" - workflows differ per project), with a comment
+explaining why (e.g. "Closed automatically - SonarQube marked this False
+Positive"). If a ticket's current workflow has no transition into a
+"done" status available at all, gozu logs that and leaves it alone rather
+than guessing at the wrong transition.
+
+## Backlog cap
+
+Each run creates at most **30** new tickets for a given project (a scan
+against a brand-new/large codebase can otherwise return hundreds of
+findings, and Jira issue-creation isn't free). Anything past the first 30
+new findings doesn't get skipped - it's rolled into one shared "backlog"
+ticket (tagged `gozu-backlog-rollup`, distinct from the per-finding
+`source-key-{key}` labels) listing those findings' keys/rules/severities.
+
+That rollup ticket updates in place on every later run instead of a new
+one appearing each time: `--watch`/webhook mode re-runs against what's
+often the same persistent backlog, so a fresh scan finding the exact same
+80 leftover findings doesn't create an 81st "80 more findings" ticket - it
+edits the existing one. As more of the backlog gets ticketed for real in
+later runs (30 more each time), the rollup ticket's count goes back down,
+reaching 0 once the backlog's fully worked through.
+
 ## Project layout
 
 ```
@@ -74,15 +113,16 @@ scanner/                scanner backends
 
 ticket/                 ticket backends
   base.py                  TicketClient interface
-  jira_client.py            Jira implementation
+  jira_client.py            Jira implementation (incl. transitions, rollup ticket)
   jira_sprint.py            active-sprint lookup/assignment
+  claims.py                idempotency ledger + open/closed status (Postgres)
   adf.py                   Atlassian Document Format builders
   factory.py                build_ticket_client() / get_ticket_client()
 
 temporal/               Temporal workflows/activities/models
   worker.py                worker process entrypoint
   workflows/               ScanToTicketWorkflow, MultiBranchScanWorkflow
-  activities/               fetch findings, create tickets, screenshot
+  activities/               fetch findings, create tickets, reconcile resolved findings, screenshot
   models/                  per-activity Pydantic input models
 
 receiver/               Flask webhook receiver

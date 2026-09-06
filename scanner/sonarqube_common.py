@@ -21,6 +21,14 @@ from scanner.sonarqube_classify import FORMER_HOTSPOT_TAG, is_security_relevant
 # SonarQube's documented max page size for issues/search.
 _PAGE_SIZE = 500
 
+# api/issues/search's classic `resolution` field - only present once an
+# issue has left OPEN/CONFIRMED/REOPENED. SonarSource's newer simplified
+# `issueStatus` model overlaps some of this (e.g. FALSE_POSITIVE), but
+# `resolution` (with this exact hyphenated spelling) is still returned
+# today for backward compatibility, same "old and new fields coexist"
+# situation as sonarqube_classify.py's type/impacts/tags triple-check.
+_RESOLVED_RESOLUTIONS = {"FIXED", "REMOVED", "WONTFIX", "FALSE-POSITIVE"}
+
 
 class SonarQubeIssueFetcher:
     """
@@ -135,3 +143,21 @@ class SonarQubeIssueFetcher:
                 )
             )
         return findings
+
+    def fetch_sonarqube_resolutions(self, finding_keys: list[str]) -> dict[str, str]:
+        """
+        Look up exactly `finding_keys` via issues/search's `issues` param
+        (a comma-separated key list) instead of componentKeys - these are
+        specific already-known issue keys, not "everything in a project",
+        and deliberately no issueStatuses filter, since a resolved/closed
+        issue is exactly what this is checking for.
+        """
+        if not finding_keys:
+            return {}
+
+        resolutions: dict[str, str] = {}
+        for raw in self._fetch_all_pages({"issues": ",".join(finding_keys)}):
+            resolution = raw.get("resolution")
+            if resolution in _RESOLVED_RESOLUTIONS:
+                resolutions[raw["key"]] = resolution
+        return resolutions

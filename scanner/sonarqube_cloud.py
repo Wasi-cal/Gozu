@@ -37,3 +37,6 @@ class SonarQubeCloudClient(SonarQubeIssueFetcher, ScannerClient):
         # No local container - SonarQube Cloud is a hosted SaaS product -
         # but the sonar-scanner CLI still needs a JVM to run.
         return ScannerRequirements(docker_services=[], host_dependencies=["java"])
+
+    def fetch_resolutions(self, finding_keys: list[str]) -> dict[str, str]:
+        return self.fetch_sonarqube_resolutions(finding_keys)
