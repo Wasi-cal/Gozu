@@ -10,14 +10,22 @@ downloads, instead of ad hoc plain-text "Done"/"Failed"/"Waiting...":
   ERROR   (x)  - something failed / is unhealthy / is down
   WARNING (!)  - a destructive action, a caveat, a degraded-but-running state
   WAITING (...)- in progress: polling, downloading, waiting on a healthcheck
+
+Plain, portable Unicode symbols, not pictograph-style emoji - deliberately
+built via named unicode escapes (rather than pasting the literal glyph)
+so the exact code point is unambiguous in source, and specifically
+WITHOUT a trailing U+FE0F variation selector - that's the specific
+character that turns a base glyph like U+26A0 into a colorful emoji
+rendering on terminals/fonts that support the distinction, instead of
+the plain monochrome symbol used here.
 """
 
 import typer
 
-SUCCESS = "✅"  # (check mark button)
-ERROR = "❌"  # (cross mark)
-WARNING = "⚠️"  # (warning sign)
-WAITING = "⏳"  # (hourglass)
+SUCCESS = "\N{CHECK MARK}"  # ✓ U+2713
+ERROR = "\N{BALLOT X}"  # ✗ U+2717
+WARNING = "\N{WARNING SIGN}"  # ⚠ U+26A0 - no U+FE0F variation selector
+WAITING = "\N{HORIZONTAL ELLIPSIS}"  # … U+2026
 
 
 def success(message: str) -> None:

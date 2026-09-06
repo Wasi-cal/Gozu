@@ -13,12 +13,12 @@ from cli.status import ERROR, SUCCESS, WARNING
 
 def _status_symbol(state: str, health: str) -> str:
     """
-    ✅ only for a genuinely good state (running, and healthy or no
-    healthcheck at all); ❌ for anything actually down (not running -
+    SUCCESS only for a genuinely good state (running, and healthy or no
+    healthcheck at all); ERROR for anything actually down (not running -
     including never created at all, which reports as state="") OR
     explicitly reported unhealthy - these are surfaced identically as
     failures since either one means "this isn't working right now",
-    distinctly from ⚠️ "still starting, not confirmed either way yet".
+    distinctly from WARNING - "still starting, not confirmed either way yet".
     """
     if state != "running":
         return ERROR
@@ -35,7 +35,7 @@ def print_stack_status(stack_dir: Path, profiles: set[str]) -> None:
     individually via service_state() - not one bulk `docker compose ps`
     dump - specifically so a service that was never created at all (a
     perfectly normal state: fresh after `gozu init`, or after `gozu down`)
-    still gets its own printed line (❌, "not created") instead of the
+    still gets its own printed line (ERROR, "not created") instead of the
     whole summary being skipped or treated as an error. Called both right
     after `gozu up` brings things up, and standalone by `gozu status` at
     any time, including when nothing has ever been started.
