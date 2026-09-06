@@ -38,6 +38,16 @@ async def reconcile_resolved_findings_activity(input: ReconcileResolvedFindingsI
     skip rather than raising - this is a bonus reconciliation step, never
     allowed to fail the workflow it runs alongside (see
     temporal/workflows/scan_to_ticket.py's try/except around this call).
+
+    Confirmed live: a single claim whose ticket_key no longer exists in
+    Jira (deleted directly, outside gozu) makes transition_to_done() raise
+    a real 404 - without its own try/except, that exception propagated out
+    of this whole activity and silently skipped reconciling every OTHER
+    claim in the same run too, not just the broken one. Each claim is now
+    handled independently: one bad claim logs a warning and the loop moves
+    on, same "one bad item can't sink the batch" rule this codebase already
+    applies to sprint assignment (ticket/jira_sprint.py) and the rollup
+    ticket (create_tickets_activity).
     """
     scanner_client = (
         build_scanner_client(input.scanner_type, input.scanner_mode, input.credentials)
@@ -73,17 +83,20 @@ async def reconcile_resolved_findings_activity(input: ReconcileResolvedFindingsI
                 continue
 
             ticket_key = row["ticket_key"]
-            if not transition_to_done(ticket_key):
-                activity.logger.warning(
-                    f"{ticket_key} has no 'done'-category transition available right now - skipping auto-close"
-                )
-                continue
+            try:
+                if not transition_to_done(ticket_key):
+                    activity.logger.warning(
+                        f"{ticket_key} has no 'done'-category transition available right now - skipping auto-close"
+                    )
+                    continue
 
-            if add_comment:
-                label = _RESOLUTION_LABELS.get(resolution, resolution)
-                add_comment(ticket_key, f"Closed automatically - SonarQube marked this {label}")
+                if add_comment:
+                    label = _RESOLUTION_LABELS.get(resolution, resolution)
+                    add_comment(ticket_key, f"Closed automatically - SonarQube marked this {label}")
 
-            claims.mark_closed(conn, destination, finding_key)
-            closed.append(ticket_key)
+                claims.mark_closed(conn, destination, finding_key)
+                closed.append(ticket_key)
+            except Exception as e:
+                activity.logger.warning(f"Auto-close failed for {ticket_key} (finding {finding_key}), leaving it open: {e}")
 
     return closed
