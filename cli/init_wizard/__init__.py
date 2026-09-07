@@ -56,8 +56,9 @@ from cli.prompts import ask_or_exit, generate_or_prompt_secret
 from cli.stack.cleanup import InterruptCleanup
 from cli.stack.files import ensure_stack_files
 from cli.stack.profiles import ensure_postgres_up, is_service_up
-from cli.status import error, waiting
+from cli.status import error, success, waiting
 from cli.wizard_engine import WizardField, run_wizard
+from config.migrations import run_migrations
 from scanner.base import SCANNER_REGISTRY
 
 
@@ -259,6 +260,17 @@ def _run_init_wizard_body(stack_dir: Path, cleanup: InterruptCleanup) -> None:
         cleanup.track("postgres")
     waiting("Bringing up Postgres ...")
     ensure_postgres_up(stack_dir, cleanup=cleanup)
+
+    # A genuinely fresh Postgres volume has no gozu schema at all yet -
+    # migration 0001 is what creates it (see config/migrations.py), same
+    # as `gozu up`'s own post-ensure_postgres_up() step. Without this,
+    # _prompt_config_name()'s list_configs() call below (and _commit()'s
+    # create_config() after it) would hit a bare "relation does not
+    # exist" instead of gozu's very first run ever working at all.
+    waiting("Applying database migrations ...")
+    applied = run_migrations(stack_dir)
+    if applied:
+        success(f"Applied {len(applied)} migration(s): {', '.join(applied)}")
 
     typer.secho("Step 2/3: scanner + credentials", bold=True)
     scanner_type = _select_scanner()

@@ -9,6 +9,7 @@ import typer
 
 import config.store as config_store
 from cli.config_lookup import resolve_config_or_prompt
+from cli.stack import ensure_config_store_ready
 from cli.status import error
 
 
@@ -22,6 +23,8 @@ def select_config(name: str | None) -> dict:
     exists, or shows an informed questionary select (name + scanner_mode +
     trigger_mode, not just a bare name list) if there are several.
     """
+    ensure_config_store_ready()
+
     if name:
         return resolve_config_or_prompt(name)
 

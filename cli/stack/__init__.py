@@ -33,6 +33,27 @@ from config.migrations import run_migrations
 from scripts.env_ports import DEFAULT_PORTS, ENV_PATH, parse_env_file
 from scripts.paths import STACK_DIR
 
+def ensure_config_store_ready() -> None:
+    """
+    Any command that touches config_store (`gozu config list/edit/delete`,
+    `gozu run`'s config selection) needs a live, migrated Postgres first -
+    the same requirement up() already documents on ensure_postgres_up()
+    itself. up()/down() get this for free because they manage the rest of
+    the stack anyway; these config-only commands don't, and previously
+    called config_store directly with nothing guaranteeing Postgres was
+    even running - confirmed live, that raised a raw
+    psycopg.OperationalError (connection refused) straight to the crash
+    handler instead of a clear message, on a machine where `gozu up`
+    hadn't been run yet (or had since been `down`ed). This is the one
+    place all four callers funnel through instead of repeating
+    require_initialized() + ensure_postgres_up() + run_migrations() four
+    times over.
+    """
+    require_initialized()
+    ensure_postgres_up(STACK_DIR)
+    run_migrations(STACK_DIR)
+
+
 # env var name -> human-readable label, for `gozu ports`. Iterated in
 # DEFAULT_PORTS's own order (the authoritative list of ports gozu itself
 # manages - see scripts/env_ports.py) rather than hand-maintained

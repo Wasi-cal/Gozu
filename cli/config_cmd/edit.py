@@ -26,6 +26,7 @@ from cli.init_wizard.jira_step import (
 from cli.init_wizard.sonar_cloud import prompt_premium_branches, prompt_sonar_organization, prompt_sonar_token_cloud
 from cli.init_wizard.sonar_local import prompt_project_key, prompt_sonar_token_local
 from cli.prompts import ask_or_exit, generate_or_prompt_secret, prompt_text
+from cli.stack import ensure_config_store_ready
 from cli.status import success, warning
 from cli.wizard_engine import WizardField, run_wizard
 
@@ -152,6 +153,7 @@ def _build_edit_fields(config: dict, state: dict) -> list[WizardField]:
 
 
 def edit_command(name: str) -> None:
+    ensure_config_store_ready()
     config = resolve_config_or_prompt(name)
     # Use the resolved config's own name from here on, not the (possibly
     # wrong) `name` argument - resolve_config_or_prompt() may have picked

@@ -25,6 +25,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import typer
+from rich.console import Console
 
 from core.constants import CONTACT_EMAILS
 from scripts.paths import LOGS_DIR
@@ -63,5 +64,19 @@ def handle_unexpected_exception(exc: BaseException) -> None:
     typer.echo("Something went wrong that gozu didn't expect.")
     typer.echo(f"Full details were logged to: {log_path}")
     typer.echo()
-    typer.echo("If you'd like to report this, here's a pre-filled email link:")
-    typer.echo(mailto_link)
+    typer.echo("If you'd like to report this:")
+    # rich's own link markup, not a raw escape sequence built by hand -
+    # Console.print() only emits the actual OSC 8 hyperlink escape
+    # sequence when it detects a real terminal (Console.is_terminal);
+    # piped/redirected output (a log capture, a non-interactive CI
+    # runner) gets the plain visible text with no escape codes at all,
+    # confirmed live - never raw escape bytes dumped into a file. A real
+    # terminal that IS attached but doesn't understand OSC 8 still gets
+    # a well-formed escape sequence it's expected to silently pass
+    # through per the OSC 8 spec, leaving just the visible text - the
+    # same plain-text floor as before this change, not something new to
+    # implement here. The mailto: URL's own content (recipients,
+    # subject, URL-encoded body referencing the log path) is completely
+    # unchanged - only the visible label changes from the raw URL to
+    # "Report this error".
+    Console().print(f"  [link={mailto_link}]Report this error[/link]")

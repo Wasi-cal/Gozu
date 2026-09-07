@@ -16,6 +16,7 @@ import config.store as config_store
 from cli.config_cmd.edit import edit_command
 from cli.config_lookup import resolve_config_or_prompt
 from cli.prompts import ask_or_exit
+from cli.stack import ensure_config_store_ready
 from cli.stack.backup import create_backup, next_backup_path
 from cli.status import success, waiting
 from scripts.paths import STACK_DIR
@@ -24,6 +25,7 @@ __all__ = ["delete_command", "edit_command", "list_command"]
 
 
 def list_command() -> None:
+    ensure_config_store_ready()
     configs = config_store.list_configs()
     if not configs:
         typer.echo("No configs found - run `gozu init` to create one.")
@@ -53,6 +55,7 @@ def delete_command(name: str) -> None:
     exact incident --wipe's own backup step was added to prevent in the
     first place, and that risk applies here too.
     """
+    ensure_config_store_ready()
     config = resolve_config_or_prompt(name)
     # Use the resolved config's own name from here on, not the (possibly
     # wrong) `name` argument - resolve_config_or_prompt() may have picked
