@@ -73,6 +73,62 @@ starts one child workflow per branch under a parent
 child workflows. A webhook delivery only ever concerns one branch, so it
 never needs to fan out - the branch list just gates which deliveries proceed.
 
+## What's in a ticket
+
+**Automatic, zero setup required** - every ticket gozu creates already has:
+
+- **Labels**, visible natively in Jira's Details panel:
+  - `source-sonarqube` - identifies the scanner (fixed, not per-finding)
+  - `security`
+  - `type-{vulnerability|hotspot}` - the finding's kind, lowercased
+  - `branch-{branch}` - only added when the finding actually has a branch
+    value (e.g. a multi-branch Premium config); omitted entirely for a
+    scanner/config with no branch concept, rather than a meaningless
+    `branch-none`
+  - `source-key-{finding key}` - gozu's own dedupe marker, not meant to
+    be human-facing
+- **Priority**, mapped from the finding's severity (`ticket/base.py`'s
+  `SEVERITY_TO_PRIORITY`: Critical/High → Highest/High, Medium → Medium,
+  Low/Info → Low) - shows in the Details panel like any other Jira
+  ticket's priority, no setup needed.
+- **A native remote link** to the finding's SonarQube deep link
+  (`POST /issue/{key}/remotelink`) - shows in Jira's "Web Links" section,
+  clickable, not a URL pasted into the description text.
+- **Description**: the finding's message, plus Component/Line/Type/
+  Severity/Source/Branch as plain text - unless the optional custom
+  fields below are set up, in which case Component/Line move out of here
+  and into their own fields instead.
+
+**Optional - only if a Jira admin sets it up (gozu never creates fields itself):**
+
+Two custom fields, if present in your Jira instance, get real structured
+values instead of plain Description text. A Jira admin creates them
+**manually** (Jira Settings → Issues → Custom fields) with these **exact**
+names and types - gozu discovers them by name, so a typo means gozu
+won't find them and everything just stays in Description, same as if you
+hadn't set anything up at all:
+
+| Field name | Jira field type |
+|---|---|
+| `SonarQube Component` | Short text |
+| `SonarQube Line` | Number |
+
+Discovery happens once per scan run (`GET /rest/api/3/field`, not once
+per ticket), and it's **per-field, not all-or-nothing** - if only one of
+the two is configured, only that one moves out of Description; the other
+stays there. With neither field created, behavior is completely
+unchanged from before this existed: both stay in Description as plain
+text.
+
+A field can exist in your Jira instance globally but not actually be on
+this specific project's create screen - the discovery query alone can't
+detect that. If Jira rejects ticket creation specifically because of one
+of these fields, gozu retries the same creation with that field removed
+and its content folded back into Description, logging clearly when this
+happens so a misconfigured field is visible rather than silently
+swallowed. A creation failure for any other reason (a bad project key,
+etc.) is unaffected by this and fails exactly as it always has.
+
 ## Auto-closing resolved findings
 
 On by default for every config, no setting to turn it off - every scan

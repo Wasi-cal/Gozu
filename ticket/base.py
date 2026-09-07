@@ -45,16 +45,27 @@ class TicketClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def create_ticket(self, finding: Finding) -> str:
-        """Create a ticket for a finding, return the new ticket's key."""
-        raise NotImplementedError
+    def create_ticket(self, finding: Finding, custom_fields: dict[str, str] | None = None) -> str:
+        """
+        Create a ticket for a finding, return the new ticket's key.
 
-    # attach_screenshot()/add_comment()/transition_to_done()/
-    # upsert_rollup_ticket()/ticket_exists() are deliberately NOT part of
-    # this contract - they're optional, backend-specific bonus
-    # capabilities (see jira_client.py). Callers use getattr(client, name,
-    # None) to detect support rather than calling them directly (see
-    # temporal/activities/capture_and_attach_screenshot.py,
-    # temporal/activities/reconcile_resolved_findings.py, and
-    # temporal/activities/create_tickets.py's backlog rollup and stale-
-    # ticket-claim recovery).
+        `custom_fields` is optional and backend-specific (Jira: whichever
+        of ticket/jira_client.py's CUSTOM_FIELD_COMPONENT_NAME/
+        CUSTOM_FIELD_LINE_NAME were found by discover_custom_fields() -
+        see create_tickets_activity, which calls that once per activity
+        run and passes the result through here for every ticket). Kept as
+        a plain optional parameter on this required method (default None,
+        a backend free to ignore it) rather than its own getattr-detected
+        bonus method, since it's part of ticket creation itself, not a
+        separate step - unlike attach_screenshot()/add_comment()/
+        transition_to_done()/upsert_rollup_ticket()/ticket_exists()/
+        discover_custom_fields(), which ARE deliberately NOT part of this
+        contract: optional, backend-specific bonus capabilities (see
+        jira_client.py). Callers use getattr(client, name, None) to
+        detect support for those rather than calling them directly (see
+        temporal/activities/capture_and_attach_screenshot.py,
+        temporal/activities/reconcile_resolved_findings.py, and
+        temporal/activities/create_tickets.py's backlog rollup,
+        stale-ticket-claim recovery, and custom-field discovery).
+        """
+        raise NotImplementedError

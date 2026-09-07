@@ -11,6 +11,7 @@ from core.models import CreatedTicket, TicketResult
 from temporal.models.create_tickets import CreateTicketsInput
 from ticket import claims
 from ticket.factory import build_ticket_client, get_ticket_client
+from ticket.jira_client import CUSTOM_FIELD_COMPONENT_NAME, CUSTOM_FIELD_LINE_NAME
 
 # Per-run cap on genuinely new tickets (Jira issue-create calls) - a named
 # constant, not a magic number, since a large one-off backlog (e.g. this
@@ -37,6 +38,15 @@ async def create_tickets_activity(input: CreateTicketsInput) -> TicketResult:
     )
     destination = client.destination_id()
     ticket_exists = getattr(client, "ticket_exists", None)
+
+    # Once per activity execution, not once per ticket - the same Jira
+    # instance backs every ticket this run creates. Missing entirely on a
+    # backend without discover_custom_fields() (or if this Jira instance
+    # has neither optional field configured) -> empty dict, which
+    # create_ticket() already treats as "keep Component/Line in
+    # Description", identical to today's behavior.
+    discover_custom_fields = getattr(client, "discover_custom_fields", None)
+    custom_fields = discover_custom_fields([CUSTOM_FIELD_COMPONENT_NAME, CUSTOM_FIELD_LINE_NAME]) if discover_custom_fields else {}
 
     created = []
     skipped = []
@@ -90,7 +100,7 @@ async def create_tickets_activity(input: CreateTicketsInput) -> TicketResult:
                     skipped.append(finding.key)
                     continue
 
-                ticket_key = client.create_ticket(finding)
+                ticket_key = client.create_ticket(finding, custom_fields)
                 claims.record_ticket(conn, destination, finding.key, ticket_key)
                 created.append(CreatedTicket(finding_key=finding.key, ticket_key=ticket_key))
             except Exception:
