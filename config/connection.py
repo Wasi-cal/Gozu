@@ -12,6 +12,23 @@ import psycopg
 from psycopg.rows import dict_row
 
 
+def env_settings() -> dict[str, str]:
+    """
+    The same POSTGRES_HOST/PORT/USER/PASSWORD/DB env vars get_connection()
+    reads, as a plain dict - pulled out so config/migrations.py (which
+    needs these same five values to build a SQLAlchemy URL for Alembic,
+    not a psycopg connection) doesn't duplicate this exact env-var
+    lookup a second time.
+    """
+    return {
+        "host": os.environ["POSTGRES_HOST"],
+        "port": os.environ["POSTGRES_PORT"],
+        "user": os.environ["POSTGRES_USER"],
+        "password": os.environ["POSTGRES_PASSWORD"],
+        "dbname": os.environ["POSTGRES_DB"],
+    }
+
+
 def get_connection() -> psycopg.Connection[dict[str, Any]]:
     # `psycopg.connect` is `Connection.connect`, a classmethod returning
     # `Self` - calling it unparameterized (the usual `psycopg.connect(...)`)
@@ -20,10 +37,6 @@ def get_connection() -> psycopg.Connection[dict[str, Any]]:
     # `Connection` explicitly before `.connect(...)` resolves `Self`
     # correctly for both.
     return psycopg.Connection[dict[str, Any]].connect(
-        host=os.environ["POSTGRES_HOST"],
-        port=os.environ["POSTGRES_PORT"],
-        user=os.environ["POSTGRES_USER"],
-        password=os.environ["POSTGRES_PASSWORD"],
-        dbname=os.environ["POSTGRES_DB"],
+        **env_settings(),
         row_factory=dict_row,
     )

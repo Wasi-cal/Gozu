@@ -2,15 +2,17 @@
 # Author: Wasiullah Rafeeq S
 
 """
-Materializes the Docker stack (docker-compose.yml, Dockerfile, sql/init.sql,
-and the Python source tree the worker/receiver images build from) into
-~/.gozu/stack/ - the directory every `docker compose` invocation in
-cli/stack/ runs against (see profiles.py, wipe.py, backup.py).
+Materializes the Docker stack (docker-compose.yml, Dockerfile,
+sql/init_sonarqube_db.sql, alembic.ini + alembic/ - gozu's own schema
+migrations, see config/migrations.py - and the Python source tree the
+worker/receiver images build from) into ~/.gozu/stack/ - the directory
+every `docker compose` invocation in cli/stack/ runs against (see
+profiles.py, wipe.py, backup.py).
 
 This exists because a pip install has none of these on disk next to the
 installed package - only the `[project.scripts]` entry point and the
 Python source dirs listed in pyproject.toml's wheel `include` land in
-site-packages. `docker-compose.yml`/`Dockerfile`/`sql/init.sql` were never
+site-packages. `docker-compose.yml`/`Dockerfile`/`sql/` were never
 bundled as package data at all, and the worker/receiver images' `build: .`
 step needs a real source tree (pyproject.toml, uv.lock, and the packages
 COPY . . pulls in) to build from - none of which exists anywhere once
@@ -44,8 +46,33 @@ from scripts.paths import STACK_DIR
 _ASSETS_PACKAGE = "cli.stack._stackfiles"
 
 # Top-level files bundled verbatim under cli/stack/_stackfiles/ (see
-# pyproject.toml's [tool.hatch.build.targets.wheel.force-include]).
-_STATIC_FILES = ["docker-compose.yml", "Dockerfile", "pyproject.toml", "uv.lock", "sql/init.sql"]
+# pyproject.toml's [tool.hatch.build.targets.wheel `include`]).
+_STATIC_FILES = [
+    "docker-compose.yml",
+    "Dockerfile",
+    "pyproject.toml",
+    "uv.lock",
+    "alembic.ini",
+]
+
+# sql/ and migrations/ (Alembic's revisions - cli/stack/_stackfiles/{sql,migrations}
+# are directory symlinks to the real top-level sql/ and migrations/,
+# confirmed live to survive a real `uv build --wheel` with full byte
+# content, not broken links) are copied as whole trees, like
+# _SOURCE_PACKAGES below, not enumerated file-by-file - a future Alembic
+# revision dropped into migrations/versions/ needs no change here at all
+# to reach ~/.gozu/stack/ once it's part of a new gozu release.
+#
+# Named migrations/, not alembic/, deliberately - confirmed live that a
+# directory literally named `alembic` at this same nesting depth gets
+# silently dropped from the wheel entirely by hatchling (every file
+# inside it, not just some), almost certainly a name collision with the
+# installed `alembic` PyPI package itself during hatchling's own file
+# resolution. alembic.ini (a single FILE, not a directory) is unaffected
+# and keeps its standard name - only the revisions directory needed
+# renaming, and `script_location` in alembic.ini (+ config/migrations.py's
+# override of it) points at "migrations" accordingly.
+_DIRECTORY_ASSETS = ["sql", "migrations"]
 
 # Every package the worker/receiver Docker images need on disk to build
 # (pyproject.toml's wheel `include` list) - already installed wherever
@@ -69,7 +96,7 @@ def _copy_tree(source: Traversable, dest: Path) -> None:
 
 
 def ensure_stack_files() -> Path:
-    """Write docker-compose.yml/Dockerfile/sql/init.sql and the source tree into ~/.gozu/stack/, returning it. Safe to call repeatedly - always re-copies to match whatever gozu version is installed; never touches .env or ~/.gozu/'s other subdirs (jre/, sonar-scanner/, backups/)."""
+    """Write docker-compose.yml/Dockerfile/sql/alembic.ini/alembic/ and the source tree into ~/.gozu/stack/, returning it. Safe to call repeatedly - always re-copies to match whatever gozu version is installed; never touches .env or ~/.gozu/'s other subdirs (jre/, sonar-scanner/, backups/)."""
     STACK_DIR.mkdir(parents=True, exist_ok=True)
     assets = importlib.resources.files(_ASSETS_PACKAGE)
 
@@ -80,6 +107,9 @@ def ensure_stack_files() -> Path:
         for part in relative_path.split("/"):
             source = source / part
         dest.write_bytes(source.read_bytes())
+
+    for relative_path in _DIRECTORY_ASSETS:
+        _copy_tree(assets / relative_path, STACK_DIR / relative_path)
 
     for package in _SOURCE_PACKAGES:
         _copy_tree(importlib.resources.files(package), STACK_DIR / package)

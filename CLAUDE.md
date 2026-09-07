@@ -38,7 +38,7 @@ actually running a scan) is open to work on.
 ## Naming: "configs", not "profiles"
 
 A saved, named set of scanner + ticket-backend credentials (see
-`sql/init.sql`'s `configs` table, `config/store.py`) is called a **config**,
+`migrations/versions/0001_initial_schema.py`'s `configs` table, `config/store.py`) is called a **config**,
 never a "profile". Docker Compose already has an unrelated built-in concept
 called profiles (`docker-compose.yml`'s `profiles: [...]` on the
 `sonarqube` service, for conditionally starting services) - reusing "profile"
@@ -134,7 +134,7 @@ remember case-by-case:
 No license line - ownership is still being confirmed with the company;
 don't add one until that's resolved. Comment syntax matches the file
 (`#` for Python/YAML/TOML/Dockerfile/plain config files, `--` for
-`sql/init.sql` specifically, `//` for anything C-style). Place it after a
+`.sql` files, `//` for anything C-style). Place it after a
 shebang line where one exists (the shebang must stay the very first
 line), before everything else - including a module docstring - otherwise.
 

@@ -414,6 +414,70 @@ Every model in this codebase is a Pydantic `BaseModel` — there are no
 | `ScreenshotAttachInput` | `temporal/models/screenshot_attach.py` | `finding: Finding`, `ticket_key`, `ticket_backend`, `credentials` | Yes — `capture_and_attach_screenshot_activity`'s input |
 | `FindingExtraction` | `scanner/screenshot.py` | `screenshot_path`, `code_snippet`, `annotation_text` | No — produced and consumed entirely inside `capture_and_attach_screenshot_activity`'s function body; never serialized by Temporal. Still a Pydantic `BaseModel`, for consistency with the rest of the codebase, not because Temporal requires it here. |
 
+## Database schema & migrations
+
+gozu's own Postgres schema (`configs`, `config_credentials`,
+`ticket_destinations`, `ticket_destination_credentials`, `ticket_claims`)
+is created and evolved by [Alembic](https://alembic.sqlalchemy.org/),
+via `config/migrations.py`'s `run_migrations()` (Alembic's own Python
+API - `alembic.command.upgrade(cfg, "head")` - not a subprocess
+shell-out to the `alembic` CLI). This replaced an earlier two-path setup
+where `sql/init.sql` ran once via Postgres's own
+`docker-entrypoint-initdb.d` hook on a genuinely fresh volume, and
+`gozu down --wipe` separately re-ran that same file by hand (that hook
+never fires twice on the same volume) - `docker-compose.yml`'s
+`postgres` service no longer mounts anything into
+`/docker-entrypoint-initdb.d/` for gozu's own schema at all.
+`run_migrations()` is now the single, explicit path both `gozu up`
+(right after Postgres is confirmed reachable) and
+`gozu down --wipe`'s reset (right after its scoped `DROP DATABASE`/
+`CREATE DATABASE`) call - the first revision IS the fresh-install case,
+applied the exact same way as every revision after it, not a
+special-cased first step.
+
+Revisions live under `migrations/versions/` (named
+`NNNN_description.py`, chained via each file's `down_revision`), NOT
+`alembic/versions/` - a directory literally named `alembic` at that
+nesting depth was confirmed live to be silently dropped in its entirety
+from a real `uv build --wheel`, almost certainly a name collision with
+the installed `alembic` PyPI package during hatchling's own file
+resolution; `alembic.ini`'s `script_location` (and
+`config/migrations.py`'s override of it) points at `migrations`
+accordingly. Every revision is pure `op.execute(<real DDL>)` -
+`target_metadata = None` in `migrations/env.py`, since there's no
+ORM/SQLAlchemy model layer anywhere in this codebase to diff against.
+Scope is deliberately narrow: **Alembic manages schema evolution only** -
+`config/store.py`, `config/ticket_destinations.py`, and
+`ticket/claims.py` all keep talking to Postgres via raw `psycopg`
+exactly as they already did; SQLAlchemy is present solely because
+Alembic depends on it to drive a migration's own DB connection.
+
+Each revision runs inside its own transaction (Alembic's default for a
+transactional-DDL database like Postgres) - a failure rolls back that
+revision and raises rather than leaving the schema half-migrated or
+silently skipping ahead to the next one.
+
+**To make a future schema change:** `alembic revision -m "description"`
+(from the repo root - reads `alembic.ini`, writes a new file under
+`migrations/versions/`), then hand-write its `upgrade()`/`downgrade()`
+with real `op.execute()` DDL - nothing else. The next `gozu up` or
+`gozu down --wipe` picks it up automatically.
+
+**To roll back a bad revision:** `alembic downgrade -1` (from the repo
+root, against whichever database `.env` points at) reverses the most
+recently applied revision via its own `downgrade()` - the concrete
+capability an Alembic-based approach adds over a hand-rolled
+apply-only runner, confirmed live against a fully-migrated database as
+part of building this.
+
+`sql/init_sonarqube_db.sql` (creating the separate `sonarqube`
+database/role local-mode SonarQube's own Postgres backend uses, in the
+same instance) is deliberately NOT part of this migration history - it's
+a single idempotent "ensure this exists" step with no evolving schema of
+its own (SonarQube manages its own schema internally once pointed at an
+empty database), so it stays on the old `docker-entrypoint-initdb.d`
+hook.
+
 ## Testing
 
 The `tests/` tree mirrors the source layout

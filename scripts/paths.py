@@ -21,3 +21,9 @@ GOZU_HOME = Path.home() / ".gozu"
 # would otherwise collide with an unrelated same-named directory a user
 # already has under GOZU_HOME for something else entirely.
 STACK_DIR = GOZU_HOME / "stack"
+
+# Timestamped tracebacks from a genuinely unexpected exception land here
+# (cli/crash_handler.py's CLI-side handler, temporal/worker.py's worker-side
+# one) - a person is pointed at a specific file under here rather than ever
+# having the raw traceback dumped to their terminal or a mailto: body.
+LOGS_DIR = GOZU_HOME / "logs"

@@ -103,6 +103,7 @@ async def create_tickets_activity(input: CreateTicketsInput) -> TicketResult:
     # Always called, even with an empty `deferred`: that's what lets an
     # existing rollup ticket's count shrink back to 0 as the backlog gets
     # worked through, not just grow.
+    rollup_ticket = None
     upsert_rollup_ticket = getattr(client, "upsert_rollup_ticket", None)
     if upsert_rollup_ticket:
         try:
@@ -112,5 +113,6 @@ async def create_tickets_activity(input: CreateTicketsInput) -> TicketResult:
                 activity.logger.info(f"Backlog rollup ticket {rollup_ticket}: {len(deferred)} deferred finding(s)")
         except Exception as e:
             activity.logger.warning(f"Backlog rollup ticket upsert failed: {e}")
+            rollup_ticket = None
 
-    return TicketResult(created=created, skipped=skipped, deferred=deferred)
+    return TicketResult(created=created, skipped=skipped, deferred=deferred, rollup_ticket=rollup_ticket)

@@ -5,18 +5,21 @@
 """gozu CLI entrypoint (see pyproject.toml's [project.scripts])."""
 
 import importlib.metadata
+import sys
 import time
 
 import typer
 
 from cli.config_cmd import delete_command, edit_command, list_command
+from cli.crash_handler import handle_unexpected_exception
 from cli.init_wizard import run_init_wizard
+from cli.report import render_run_report
 from cli.scan_runner import run_scan_cycle, select_config
 from cli.stack import down as stack_down
 from cli.stack import ports as stack_ports
 from cli.stack import status as stack_status
 from cli.stack import up as stack_up
-from cli.status import success, waiting
+from cli.status import waiting
 from scripts.bootstrap_env import load_into_environ
 
 app = typer.Typer(
@@ -88,19 +91,6 @@ def init() -> None:
     run_init_wizard()
 
 
-def _print_summary(summary: dict) -> None:
-    created = summary["created"]
-    skipped = summary["skipped"]
-    success(
-        f"Done: created {len(created)} ticket(s), skipped {len(skipped)} already-ticketed finding(s) "
-        f"(SonarQube task {summary['ce_task_id']})"
-    )
-    for entry in created:
-        typer.echo(f"  created {entry['ticket_key']} for finding {entry['finding_key']}")
-    for finding_key in skipped:
-        typer.echo(f"  skipped finding {finding_key} (ticket already exists)")
-
-
 @app.command()
 def run(
     config: str = typer.Option(
@@ -126,25 +116,39 @@ def run(
     path: str = typer.Option(
         ".", "--path", "-p", help="Path to the code to scan - defaults to the current directory."
     ),
+    skip_unchanged: bool = typer.Option(
+        False,
+        "--skip-unchanged",
+        "-s",
+        help="Skip the scan/fetch/create-tickets sequence entirely when the scan path is a git repo "
+        "whose HEAD commit and clean/dirty working-tree state exactly match this config's last "
+        "successful run - auto-close reconciliation still runs every cycle regardless. Only helps a "
+        "committed-and-clean checkout: a non-git directory, or one whose caller never commits, gets no "
+        "benefit and just scans normally, as if this flag were never passed. Off by default.",
+    ),
 ) -> None:
     """
     Run sonar-scanner against your code, wait for SonarQube to finish
     analyzing it server-side, then create a Jira ticket for each new
     finding (skipping ones already ticketed). Requires a config from
-    `gozu init` and the stack to be up (`gozu up`).
+    `gozu init` and the stack to be up (`gozu up`). Prints a summary
+    report (tickets created/skipped/deferred/auto-closed, run duration)
+    once every step has finished.
     """
     selected = select_config(config)
 
     if not watch:
-        summary = run_scan_cycle(selected, path)
-        _print_summary(summary)
+        start = time.monotonic()
+        ce_task_id, branches, ticket_result = run_scan_cycle(selected, path, skip_unchanged)
+        render_run_report(selected["name"], branches, ce_task_id, ticket_result, time.monotonic() - start)
         return
 
     waiting(f"Watching every {interval}s - Ctrl+C to stop.")
     try:
         while True:
-            summary = run_scan_cycle(selected, path)
-            _print_summary(summary)
+            start = time.monotonic()
+            ce_task_id, branches, ticket_result = run_scan_cycle(selected, path, skip_unchanged)
+            render_run_report(selected["name"], branches, ce_task_id, ticket_result, time.monotonic() - start)
             time.sleep(interval)
     except KeyboardInterrupt:
         typer.echo("\nStopping.")
@@ -246,5 +250,32 @@ def config_delete(
     delete_command(name)
 
 
+def main() -> None:
+    """
+    The actual pyproject.toml [project.scripts] entry point (not `app`
+    itself) - the only place that wraps the whole CLI invocation in a
+    single top-level handler for a genuinely unexpected exception.
+
+    Click's own `app()` call (standalone_mode, the default) already
+    converts every deliberate exit path - typer.Exit (--version, every
+    "config not found"/"not initialized" message, wipe confirmation,
+    subprocess exit-code propagation, ...) and Abort - into a SystemExit
+    before it ever reaches this function; KeyboardInterrupt is likewise
+    already fully handled at its two actual sources (`run --watch`'s own
+    try/except, cli/stack/cleanup.py's InterruptCleanup) before it can
+    propagate this far. So both are simply let through unchanged here -
+    only a real, unclassified exception (a bug, an unwrapped error from
+    somewhere deep in a backend call) falls through to
+    handle_unexpected_exception().
+    """
+    try:
+        app()
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception as e:
+        handle_unexpected_exception(e)
+        sys.exit(1)
+
+
 if __name__ == "__main__":
-    app()
+    main()

@@ -292,7 +292,7 @@ def run_init_wizard() -> None:
 
     step_bootstrap_env()
 
-    # Materializes docker-compose.yml/Dockerfile/sql/init.sql (+ the source
+    # Materializes docker-compose.yml/Dockerfile/sql/ (+ the source
     # tree the worker/receiver images build from) into ~/.gozu/ - see
     # cli/stack/files.py. Pure file writes, no Docker interaction - safe to
     # do before the interrupt-cleanup scope even starts.

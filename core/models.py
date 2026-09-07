@@ -59,3 +59,14 @@ class TicketResult(BaseModel):
     # ticketed", not "deferred". Rolled up into one shared ticket instead
     # of one each - see JiraClient.upsert_rollup_ticket().
     deferred: list[str] = []
+    # The shared rollup ticket's key, set by create_tickets_activity
+    # whenever `deferred` is non-empty and the ticket backend supports
+    # upsert_rollup_ticket() - None otherwise (no deferred findings, or
+    # the backend/attempt doesn't support it).
+    rollup_ticket: str | None = None
+    # Ticket keys reconcile_resolved_findings_activity auto-closed this
+    # same run (temporal/workflows/scan_to_ticket.py) - attached onto this
+    # same TicketResult rather than a separate model, since this is
+    # already the one "what happened this run" result returned all the
+    # way out to the CLI (cli/report.py's end-of-run summary).
+    closed: list[str] = []

@@ -4,8 +4,9 @@
 # Depends on: PostgreSQL - data storage
 
 """
-Postgres-backed idempotency ledger for ticket creation - see sql/init.sql's
-`ticket_claims` table for why this exists: it closes the check-then-act
+Postgres-backed idempotency ledger for ticket creation - see
+migrations/versions/0004_add_ticket_claims.py's `ticket_claims` table for why
+this exists: it closes the check-then-act
 race in create_tickets_activity's old find_existing()-then-create_ticket()
 pattern, where two overlapping runs (concurrent multi-branch fan-out, an
 activity retry after a partial failure, or two configs pointed at the same

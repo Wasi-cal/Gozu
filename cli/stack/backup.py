@@ -7,8 +7,12 @@
 Pre-`--wipe` Postgres backup - added after a real incident: a fully
 confirmed, deliberately-executed `--wipe` destroyed real dev
 configs/credentials with nothing to restore from, since no backup existed
-at the time. Postgres only (configs, ticket_destinations, claims) -
-SonarQube's volume is a deliberate exclusion, not an oversight.
+at the time. Only ever gozu's own database (POSTGRES_DB - configs,
+ticket_destinations, claims): pg_dump below is scoped to a single named
+database, so local-mode SonarQube's own separate `sonarqube` database
+(sql/init_sonarqube_db.sql, same Postgres instance) is a deliberate
+exclusion here too, not an oversight - matching cli/stack/wipe.py's
+DROP/CREATE DATABASE reset, which is scoped the exact same way.
 """
 
 import subprocess

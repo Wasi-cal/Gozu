@@ -5,9 +5,10 @@
 
 """
 CRUD for the `ticket_destinations` + `ticket_destination_credentials`
-tables (sql/init.sql) - a shared ticket board + credentials that more than
-one config can reference (`configs.ticket_destination_id`), instead of
-each config carrying its own copy of the same credentials.
+tables (migrations/versions/0005_add_ticket_destinations.py) - a shared
+ticket board + credentials that more than one config can reference
+(`configs.ticket_destination_id`), instead of each config carrying its
+own copy of the same credentials.
 
 Same encrypt-on-write/decrypt-on-read shape as config/store.py's configs/
 config_credentials - kept in its own module since it's a genuinely
