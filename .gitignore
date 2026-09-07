@@ -9,3 +9,9 @@ __pycache__/
 *.pyc
 .ruff_cache/
 .scannerwork/
+
+# ARCHITECTURE.md and Setup.md live here now - kept on disk for local
+# reference but no longer tracked (README.md/CLAUDE.md stay at repo root,
+# tracked, since GitHub's repo homepage and Claude Code's own context
+# loading both depend on those two specific paths).
+docs/

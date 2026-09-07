@@ -219,6 +219,10 @@ before this was configurable at all.
 
 ## Project layout
 
+(This layout also includes `docs/ARCHITECTURE.md` and `docs/Setup.md`,
+referenced below - that folder is gitignored, kept locally for reference
+rather than tracked, so it won't be present in a fresh clone.)
+
 ```
 cli/                    the `gozu` CLI (typer)
   main.py                 entrypoint: init / run / up / down
@@ -263,7 +267,7 @@ receiver/               Flask webhook receiver
 core/models.py          shared domain models (Finding, TicketResult, ...)
 scripts/                 one-off/bootstrap scripts (env setup, seeding)
 config/migrations.py     Alembic migration runner (config/migrations.py)
-alembic.ini, migrations/ Alembic config + revisions (see ARCHITECTURE.md)
+alembic.ini, migrations/ Alembic config + revisions (see docs/ARCHITECTURE.md)
 sql/init_sonarqube_db.sql  local-mode SonarQube's own database/role, unrelated to the above
 ```
 
@@ -288,7 +292,7 @@ the receiver only ever talk to the abstract interface.
 A **config** (never called a "profile" - Docker Compose already has an
 unrelated `profiles` concept) is a named set of scanner + ticket
 credentials, stored in Postgres (schema created/evolved by
-`config/migrations.py` - see ARCHITECTURE.md's "Database schema &
+`config/migrations.py` - see docs/ARCHITECTURE.md's "Database schema &
 migrations") via `config/store.py`.
 Every secret value is Fernet-encrypted (`config/crypto.py`) before it
 touches the database; `FERNET_KEY` lives only in `.env`, never committed.
