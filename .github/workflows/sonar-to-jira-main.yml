@@ -1,0 +1,62 @@
+# Copyright (c) 2026 Calfus Inc.
+# Author: Prakrit Mohanty
+
+name: Sonar to Jira (main)
+
+# Reacts to SonarQube Cloud's Automatic Analysis (which scans `main` on
+# every push automatically, no scan step needed here - see
+# docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/automatic-analysis)
+# by waiting for that analysis to land, then creating Jira tickets for new
+# findings - see github_action/main.py.
+#
+# Deliberately scoped to `main` only: SonarQube Cloud's Free plan rejects
+# querying issue data for any other branch ("Organization is not allowed
+# to access data from non main branches" - confirmed live, see
+# cli/scan_runner/scanner_exec.py's comment), so a PR-time equivalent of
+# this workflow cannot work on Free.
+#
+# Runs entirely inside GitHub's own runner - unlike gozu's webhook trigger
+# mode, this needs no receiver reachable from the public internet, only
+# outbound calls to SonarQube Cloud's and Jira's APIs.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: sonar-to-jira-main
+  cancel-in-progress: false
+
+jobs:
+  create-tickets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Swap for `pip install gozu` once this is published to PyPI - see
+      # Setup.md for the current install path and why it isn't there yet.
+      - name: Install gozu
+        run: pip install https://github.com/Wasi-cal/Gozu/releases/download/v0.2.3/gozu-0.2.3-py3-none-any.whl
+
+      - name: Install Playwright's Chromium
+        run: playwright install --with-deps chromium
+
+      - name: Wait for analysis and create Jira tickets
+        env:
+          SCANNER_TYPE: sonarqube-cloud
+          SONAR_HOST_URL: https://sonarcloud.io
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_ORGANIZATION: ${{ secrets.SONAR_ORGANIZATION }}
+          SONAR_PROJECT_KEY: ${{ secrets.SONAR_PROJECT_KEY }}
+          TICKET_BACKEND: jira
+          JIRA_URL: ${{ secrets.JIRA_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+          COMMIT_TIMESTAMP: ${{ github.event.head_commit.timestamp }}
+        run: gozu-github-action
