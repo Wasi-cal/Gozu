@@ -38,10 +38,16 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Swap for `pip install gozu` once this is published to PyPI - see
-      # Setup.md for the current install path and why it isn't there yet.
+      # Installs from this exact checkout, not a GitHub Release URL -
+      # this repo is private, and pip has no credentials to fetch a
+      # private repo's release asset (confirmed live: a plain
+      # `pip install <release url>` 404s here even though the release
+      # itself exists - GitHub returns 404, not 401/403, for a private
+      # resource fetched unauthenticated). Installing from the checkout
+      # also means this never drifts from whatever version is actually on
+      # main. Swap for `pip install gozu` once this is published to PyPI.
       - name: Install gozu
-        run: pip install https://github.com/Wasi-cal/Gozu/releases/download/v0.2.3/gozu-0.2.3-py3-none-any.whl
+        run: pip install .
 
       - name: Install Playwright's Chromium
         run: playwright install --with-deps chromium
