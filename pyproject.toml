@@ -27,6 +27,7 @@ dependencies = [
 
 [project.scripts]
 gozu = "cli.main:main"
+gozu-github-action = "github_action.main:main"
 
 [dependency-groups]
 dev = ["pytest", "pytest-asyncio"]
@@ -57,4 +58,5 @@ include = [
     "cli/**",
     "scripts/**",
     "config/**",
+    "github_action/**",
 ]

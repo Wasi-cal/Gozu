@@ -7,7 +7,7 @@ into the current code. For setup/installation steps, see `README.md` —
 this document assumes the system is already running and focuses on how
 it behaves.
 
-## One-paragraph summary
+## One-paragraph  
 
 SonarQube analyzes a project and fires a webhook. A Flask receiver
 verifies the webhook's signature and starts a Temporal workflow. That
@@ -178,45 +178,25 @@ which ticketing system sit behind it:
 - **`scanner/client.py`** — `ScannerClient` is an `ABC` with one method,
   `fetch_findings(project_key) -> list[Finding]` (combining vulnerabilities
   and hotspots into one list is an internal detail of each adapter, not
-  part of the generic contract). Building a concrete client is split in
-  two (Phase 3): `build_scanner_client(scanner_type, scanner_mode,
-  credentials)` is a pure constructor (no env reads) used by `gozu run`
-  with a specific config's credentials; `get_scanner_client()` is a thin
-  wrapper that reads `SCANNER_TYPE`/`SONAR_*` from the environment and
-  delegates to the builder, kept for the webhook receiver, which has no
-  per-config credentials of its own. Either way, these two functions are
-  the only place in the codebase that should know which concrete class is
-  in use.
+  part of the generic contract). `get_scanner_client()` is the single
+  place that reads `SCANNER_TYPE` and picks a concrete class — the
+  comment in the code calls this out explicitly: *"the ONLY place in the
+  codebase that should know which concrete class is in use."*
   - `SonarQubeServerClient` — the real implementation, talking to
     self-hosted SonarQube. Auth is HTTP Basic with the token as username
     and an empty password (`(token, "")`), which is SonarQube's
     documented convention for using a personal access token in place of
-    a username/password pair on its REST API. Its `base_url` (used for
-    `Finding.deep_link`, human-facing) and the URL it actually issues
-    requests against (`resolve_container_host(base_url)`) are deliberately
-    kept separate: the worker always runs inside Docker Compose's own
-    network, where "localhost" means the container itself, not whatever
-    host-side SonarQube a config's `sonar_host_url` points at.
-    `resolve_container_host()` rewrites `localhost`/`127.0.0.1` to
-    `host.docker.internal` (native on Docker Desktop; `docker-compose.yml`'s
-    `worker` service adds the `host.docker.internal:host-gateway`
-    `extra_hosts` entry for Linux) for requests this process makes itself
-    — never for `Finding.deep_link`, which stays human-facing since it's
-    shown in Jira ticket descriptions and must resolve from a real browser
-    outside Docker. `scanner/screenshot.py`'s Playwright navigation applies
-    the same translation to `deep_link` for the same container-networking
-    reason, separately from the stored (untranslated) value.
+    a username/password pair on its REST API.
   - `SonarQubeCloudClient` — a deliberate stub. `fetch_findings` raises
-    `NotImplementedError`; switching to it later should mean implementing
-    this one method, nothing else in the codebase needs to change.
-    Nothing currently exercises this path.
+    `NotImplementedError`; switching to it later should mean "flip
+    `SCANNER_TYPE=sonarqube-cloud` and implement this one method,
+    nothing else in the codebase needs to change." Nothing currently
+    exercises this path.
 - **`scanner/screenshot.py`** — see the deep dive below; this file has
   the most interesting failure history in the codebase. Not part of the
   `ScannerClient` contract — it's a SonarQube-specific bonus capability
-  (Sonar's deep-link URL shape, token-based Basic auth), called directly
-  by the screenshot activity rather than through `get_scanner_client()`.
-  Its browser context cache is keyed by token (not a single global
-  singleton) since different configs need different Basic-auth headers.
+  (Sonar's deep-link URL shape, `SONAR_TOKEN` auth), called directly by
+  the screenshot activity rather than through `get_scanner_client()`.
 
 #### The screenshot/extraction story
 
@@ -326,11 +306,9 @@ running).
 - **`TicketClient`** is an `ABC` with two methods
   (`find_existing`, `create_ticket`) — the seam between "some ticketing
   product" and everything upstream; nothing outside `ticket/client.py`
-  should ever construct `JiraClient` directly. Same split as
-  `scanner/client.py` (Phase 3): `build_ticket_client(ticket_backend,
-  credentials)` is a pure constructor used by `gozu run`'s per-config
-  credentials; `get_ticket_client()` reads `TICKET_BACKEND`/`JIRA_*` from
-  the environment and delegates to it, kept for the webhook receiver.
+  should ever construct `JiraClient` directly. `get_ticket_client()` is
+  the single place that reads `TICKET_BACKEND` and picks a concrete
+  class.
 - **`JiraClient`** — the only concrete implementation today. Every
   method follows the same shape: build a `requests` call with
   `auth=self.auth`, check the response via `_raise_for_status` (a plain
@@ -408,10 +386,8 @@ Every model in this codebase is a Pydantic `BaseModel` — there are no
 | `Finding` | `core/models.py` | `key`, `title`, `severity`, `component`, `line`, `message`, `finding_type`, `deep_link`, `source_tool`, `branch` | Yes — activity input/output |
 | `CreatedTicket` | `core/models.py` | `finding_key`, `ticket_key` | Yes — nested in `TicketResult` |
 | `TicketResult` | `core/models.py` | `created: list[CreatedTicket]`, `skipped: list[str]` | Yes — `create_tickets_activity`'s return type and the workflow's return type |
-| `SonarToJiraInput` | `temporal/models/sonar_to_jira.py` | `project_key`, `task_id`, `scanner_type`, `scanner_mode`, `ticket_backend`, `credentials: dict[str, str]` | Yes — the workflow's input. The last four fields (Phase 3) default to the legacy single-global-config values, so the webhook receiver's `SonarToJiraInput(project_key=..., task_id=...)` is unaffected — an empty `credentials` tells every activity to fall back to its env-var-based client factory |
-| `FetchFindingsInput` | `temporal/models/fetch_findings.py` | `project_key`, `scanner_type`, `scanner_mode`, `credentials` | Yes — `fetch_findings_activity`'s input (a narrow subset of `SonarToJiraInput`, interface segregation) |
-| `CreateTicketsInput` | `temporal/models/create_tickets.py` | `findings: list[Finding]`, `ticket_backend`, `credentials` | Yes — `create_tickets_activity`'s input |
-| `ScreenshotAttachInput` | `temporal/models/screenshot_attach.py` | `finding: Finding`, `ticket_key`, `ticket_backend`, `credentials` | Yes — `capture_and_attach_screenshot_activity`'s input |
+| `SonarToJiraInput` | `temporal/models/sonar_to_jira.py` | `project_key`, `task_id` | Yes — the workflow's input |
+| `ScreenshotAttachInput` | `temporal/models/screenshot_attach.py` | `finding: Finding`, `ticket_key` | Yes — `capture_and_attach_screenshot_activity`'s input |
 | `FindingExtraction` | `scanner/screenshot.py` | `screenshot_path`, `code_snippet`, `annotation_text` | No — produced and consumed entirely inside `capture_and_attach_screenshot_activity`'s function body; never serialized by Temporal. Still a Pydantic `BaseModel`, for consistency with the rest of the codebase, not because Temporal requires it here. |
 
 ## Database schema & migrations
@@ -554,3 +530,5 @@ before running the worker or receiver (see `README.md` for the exact
   the only ticket client that exists — the pattern is there for when
   (if) a second backend is added, not because it currently does
   anything at runtime.
+
+- hi this is prakrit
