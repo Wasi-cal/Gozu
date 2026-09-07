@@ -48,7 +48,7 @@ from sqlalchemy import create_engine
 from config.connection import env_settings
 
 
-def _build_alembic_config(stack_dir: Path) -> Config:
+def _build_alembic_config(stack_dir: Path) -> tuple[Config, str]:
     cfg = Config(str(stack_dir / "alembic.ini"))
     cfg.set_main_option("script_location", str(stack_dir / "migrations"))
 
@@ -58,7 +58,7 @@ def _build_alembic_config(stack_dir: Path) -> Config:
         f"@{settings['host']}:{settings['port']}/{settings['dbname']}"
     )
     cfg.set_main_option("sqlalchemy.url", url)
-    return cfg
+    return cfg, url
 
 
 def run_migrations(stack_dir: Path) -> list[str]:
@@ -75,10 +75,10 @@ def run_migrations(stack_dir: Path) -> list[str]:
     rolled back, not partially applied, and command.upgrade() raises
     rather than silently skipping ahead to the next one.
     """
-    cfg = _build_alembic_config(stack_dir)
+    cfg, url = _build_alembic_config(stack_dir)
     script = ScriptDirectory.from_config(cfg)
 
-    engine = create_engine(cfg.get_main_option("sqlalchemy.url"))
+    engine = create_engine(url)
     try:
         with engine.connect() as connection:
             current = MigrationContext.configure(connection).get_current_heads()

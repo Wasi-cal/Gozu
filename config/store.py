@@ -21,6 +21,8 @@ never touches them, since it's for a picker list, not for use.
 Called "configs", not "profiles" - see migrations/versions/0001_initial_schema.py for why.
 """
 
+from psycopg import sql
+
 from config.connection import get_connection
 from config.crypto import decrypt_token, encrypt_token
 from config.ticket_destinations import (
@@ -208,12 +210,16 @@ def update_config_fields(name: str, **fields) -> None:
     if not fields:
         raise ValueError("update_config_fields() called with no fields to update")
 
-    set_clause = ", ".join(f"{key} = %s" for key in fields)
+    # sql.Identifier-quoted column names, not an f-string - column names
+    # can't be passed as %s params (those are for values only), and a
+    # plain f-string query is typed as `str`, which psycopg's execute()
+    # doesn't accept (it wants LiteralString/bytes/SQL/Composed).
+    set_clause = sql.SQL(", ").join(sql.SQL("{} = %s").format(sql.Identifier(key)) for key in fields)
+    query = sql.SQL("UPDATE configs SET {set_clause}, updated_at = now() WHERE name = %s RETURNING id").format(
+        set_clause=set_clause
+    )
     with get_connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"UPDATE configs SET {set_clause}, updated_at = now() WHERE name = %s RETURNING id",
-            (*fields.values(), name),
-        )
+        cur.execute(query, (*fields.values(), name))
         if cur.fetchone() is None:
             raise ValueError(f"No config named '{name}'")
 

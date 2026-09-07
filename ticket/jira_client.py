@@ -207,7 +207,7 @@ class JiraClient(TicketClient):
         }
         if component_field_id:
             fields[component_field_id] = finding.component
-        if line_value is not None:
+        if line_field_id and line_value is not None:
             fields[line_field_id] = line_value
         return {"fields": fields}
 

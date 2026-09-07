@@ -5,10 +5,7 @@
 
 """
 Renders a syntax-highlighted PNG snippet of the source lines around a
-finding, server-side via Pygments - no browser/headless Chromium
-involved at all. Replaces an earlier Playwright-based implementation
-that screenshotted SonarQube's own web UI; that approach is gone
-entirely (see git history if you need it), not kept alongside this one.
+finding, server-side via Pygments
 
 render_finding_snippet() fetches the raw source lines directly from
 SonarQube's REST API (/api/sources/lines), not by rendering any page -
@@ -128,6 +125,13 @@ def render_finding_snippet(finding: Finding, token: str, context_lines: int = DE
     highlighted_line = (finding.line or from_line) - from_line + 1
 
     formatter = ImageFormatter(
+        # pygments-stubs' Formatter.__init__ overloads only bind
+        # Formatter[bytes] (what ImageFormatter always is) when either
+        # `encoding` or `outencoding` is explicitly a `str` - passing
+        # neither, even though ImageFormatter itself doesn't actually use
+        # `encoding` when rendering, is what pyright's "no overloads
+        # match" was about. Any str value satisfies the overload.
+        encoding="utf-8",
         line_numbers=True,
         line_number_start=from_line,
         hl_lines=[highlighted_line],
