@@ -19,10 +19,10 @@ internally, see `ARCHITECTURE.md`. For the source-checkout developer flow
 ## 2. Install
 
 ```bash
-pipx install https://github.com/Wasi-cal/Gozu/releases/download/v0.2.3/gozu-0.2.3-py3-none-any.whl
+pipx install https://github.com/Wasi-cal/Gozu/releases/download/v0.3.0/gozu-0.3.0-py3-none-any.whl
 ```
 
-Swap `v0.2.3` for whatever the latest tag is on the
+Swap `v0.3.0` for whatever the latest tag is on the
 [releases page](https://github.com/Wasi-cal/Gozu/releases). Don't have
 `pipx`? Plain `pip install <that same url>` into a virtualenv works too.
 
