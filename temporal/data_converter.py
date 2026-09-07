@@ -7,5 +7,5 @@
 
 from temporalio.contrib.pydantic import pydantic_data_converter
 
-TASK_QUEUE = "sonar-jira-queue"
+TASK_QUEUE = "gozu-task-queue"
 DATA_CONVERTER = pydantic_data_converter
