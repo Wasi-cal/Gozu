@@ -20,8 +20,12 @@ with workflow.unsafe.imports_passed_through():
     )
     from temporal.activities.create_tickets import create_tickets_activity
     from temporal.activities.fetch_findings import fetch_findings_activity
+    from temporal.activities.reconcile_resolved_findings import (
+        reconcile_resolved_findings_activity,
+    )
     from temporal.models.create_tickets import CreateTicketsInput
     from temporal.models.fetch_findings import FetchFindingsInput
+    from temporal.models.reconcile_resolved_findings import ReconcileResolvedFindingsInput
     from temporal.models.screenshot_attach import ScreenshotAttachInput
 
 
@@ -50,8 +54,16 @@ class ScanToTicketWorkflow:
             # create_tickets_activity below) looks identical over the API to
             # "not indexed yet" (both 404 "Project not found"). More
             # attempts + a longer initial backoff than the default gives
-            # that indexing lag room to resolve before giving up for real.
-            retry_policy=RetryPolicy(initial_interval=timedelta(seconds=2), maximum_attempts=8),
+            # that indexing lag room to resolve before giving up for real -
+            # unchanged by non_retryable_error_types below, which only ever
+            # stops retrying a ScannerAuthError (an invalid/expired token -
+            # genuinely permanent, no amount of waiting fixes it), never a
+            # 404 - that stays on the retryable path exactly as before.
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=2),
+                maximum_attempts=8,
+                non_retryable_error_types=["ScannerAuthError"],
+            ),
         )
 
         workflow.logger.info(
@@ -67,17 +79,50 @@ class ScanToTicketWorkflow:
             create_tickets_activity,
             CreateTicketsInput(findings=findings, ticket_backend=input.ticket_backend, credentials=input.credentials),
             start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=RetryPolicy(maximum_attempts=3),
+            # TicketAuthError (invalid/expired Jira token) and
+            # TicketValidationError (a permanently malformed request - bad
+            # project key, invalid issue type/field) never get fixed by
+            # retrying; everything else (404s, 429s, 5xxs, timeouts) stays
+            # on the normal retryable path, unchanged.
+            retry_policy=RetryPolicy(
+                maximum_attempts=3,
+                non_retryable_error_types=["TicketAuthError", "TicketValidationError"],
+            ),
         )
 
         workflow.logger.info(
             f"Tickets: created {len(ticket_result.created)} ticket(s), "
-            f"skipped {len(ticket_result.skipped)} already-ticketed finding(s)"
+            f"skipped {len(ticket_result.skipped)} already-ticketed finding(s), "
+            f"deferred {len(ticket_result.deferred)} finding(s) to the backlog rollup"
         )
         for entry in ticket_result.created:
             workflow.logger.info(f"  created {entry.ticket_key} for finding {entry.finding_key}")
         for finding_key in ticket_result.skipped:
             workflow.logger.info(f"  skipped finding {finding_key} (ticket already exists)")
+
+        # Alongside/after ticket creation, same run - not a separate
+        # trigger, and always on for every config. Never allowed to fail
+        # this workflow: closing tickets automatically is a bonus on top
+        # of the create pipeline above, which already succeeded by this
+        # point, same "don't let a bonus feature undo real work" rule as
+        # jira_client.py's sprint assignment and rollup-ticket upsert.
+        try:
+            closed_tickets = await workflow.execute_activity(
+                reconcile_resolved_findings_activity,
+                ReconcileResolvedFindingsInput(
+                    scanner_type=input.scanner_type,
+                    scanner_mode=input.scanner_mode,
+                    ticket_backend=input.ticket_backend,
+                    credentials=input.credentials,
+                ),
+                start_to_close_timeout=timedelta(seconds=60),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+            workflow.logger.info(f"Reconciled resolved findings: auto-closed {len(closed_tickets)} ticket(s)")
+            for ticket_key in closed_tickets:
+                workflow.logger.info(f"  auto-closed {ticket_key}")
+        except Exception as e:
+            workflow.logger.warning(f"Reconciling resolved findings failed, leaving existing tickets untouched: {e}")
 
         if ticket_result.created:
             findings_by_key = {finding.key: finding for finding in findings}

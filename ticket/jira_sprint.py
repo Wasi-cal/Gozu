@@ -52,6 +52,13 @@ class SprintAssigner:
             params={"state": "active"},
             auth=self.auth,
         )
+        if sprints_response.status_code == 400:
+            # Kanban boards don't support sprints at all - Jira signals this
+            # with a 400 ("The board does not support sprints"), not an
+            # empty sprint list, so it needs its own check before the
+            # generic raise-on-any-non-2xx below.
+            activity.logger.warning(f"Board {board_id} doesn't support sprints (Kanban) - new tickets will stay in the backlog")
+            return None
         self._raise_for_status(sprints_response, "sprint lookup")
         sprints = sprints_response.json().get("values", [])
         if not sprints:

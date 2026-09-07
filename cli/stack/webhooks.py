@@ -8,6 +8,7 @@ import secrets
 import typer
 
 import config.store as config_store
+from cli.status import warning
 
 # Fixed inside the Docker network (docker-compose.yml's receiver service
 # always listens on 5000 internally) - RECEIVER_PORT (.env) is only the
@@ -28,7 +29,7 @@ def ensure_webhook_secrets(configs: list[dict]) -> None:
 
         secret = secrets.token_urlsafe(32)
         config_store.set_credential(config["name"], "webhook_secret", secret)
-        typer.secho(f"Generated a webhook secret for '{config['name']}':", fg=typer.colors.YELLOW)
+        warning(f"Generated a webhook secret for '{config['name']}':")
         typer.secho(f"  {secret}", bold=True)
         typer.secho("  (shown once - it's stored encrypted, this is your only chance to copy it elsewhere)", dim=True)
 

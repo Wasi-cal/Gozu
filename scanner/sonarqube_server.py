@@ -22,3 +22,6 @@ class SonarQubeServerClient(SonarQubeIssueFetcher, ScannerClient):
 
     def requirements(self) -> ScannerRequirements:
         return ScannerRequirements(docker_services=["sonarqube"], host_dependencies=["java"])
+
+    def fetch_resolutions(self, finding_keys: list[str]) -> dict[str, str]:
+        return self.fetch_sonarqube_resolutions(finding_keys)

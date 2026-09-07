@@ -20,13 +20,17 @@ Called "configs", not "profiles" - see sql/init.sql for why.
 from config.connection import get_connection
 from config.crypto import decrypt_token, encrypt_token
 from config.ticket_destinations import (
+    count_configs_using_destination,
     create_ticket_destination,
     get_ticket_destination,
     get_ticket_destination_by_id,
     list_ticket_destinations,
+    set_destination_credential,
+    set_destination_project_key,
 )
 
 __all__ = [
+    "count_configs_using_destination",
     "create_config",
     "create_ticket_destination",
     "delete_config",
@@ -36,7 +40,15 @@ __all__ = [
     "list_configs",
     "list_ticket_destinations",
     "set_credential",
+    "update_config_credential",
+    "update_config_fields",
 ]
+
+# credentials keys that resolve to a shared ticket_destinations row
+# instead of this config's own config_credentials, when one is set - see
+# get_config()'s own resolution below, which update_config_credential()
+# mirrors exactly rather than reimplementing separately.
+_DESTINATION_RESOLVED_KEYS = {"jira_url", "jira_email", "jira_api_token", "jira_project_key"}
 
 
 def create_config(
@@ -157,11 +169,13 @@ def delete_config(name: str) -> bool:
 
 def set_credential(name: str, key: str, value: str) -> None:
     """
-    Insert or update a single credential on an existing config, encrypting
-    `value` first. Used by `gozu up` to persist a generated
-    webhook_secret onto a config that predates one - not a general
-    config-editing API (create_config() is still the only way to set
-    everything else). Raises ValueError if no config named `name` exists.
+    Insert or update a single credential directly on this config's own
+    config_credentials, encrypting `value` first - never resolves a
+    shared ticket_destination, unlike update_config_credential() below.
+    Used by `gozu up` to persist a generated webhook_secret onto a config
+    that predates one, and internally by update_config_credential() for
+    any key that isn't destination-resolved. Raises ValueError if no
+    config named `name` exists.
     """
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT id FROM configs WHERE name = %s", (name,))
@@ -174,3 +188,67 @@ def set_credential(name: str, key: str, value: str) -> None:
             "ON CONFLICT (config_id, key) DO UPDATE SET value = EXCLUDED.value",
             (row["id"], key, encrypt_token(value)),
         )
+
+
+def update_config_fields(name: str, **fields) -> None:
+    """
+    Direct column updates on `configs` for a config that already exists -
+    today only ever called with project_key/branches (`gozu config
+    edit`'s only two non-credential editable fields), but generic over
+    whatever columns are passed as kwargs rather than hardcoding those two
+    names, so it stays correct if another plain column becomes editable
+    later. Raises ValueError if no config named `name` exists, or if
+    `fields` is empty (nothing to update is a caller bug, not a silent
+    no-op).
+    """
+    if not fields:
+        raise ValueError("update_config_fields() called with no fields to update")
+
+    set_clause = ", ".join(f"{key} = %s" for key in fields)
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE configs SET {set_clause}, updated_at = now() WHERE name = %s RETURNING id",
+            (*fields.values(), name),
+        )
+        if cur.fetchone() is None:
+            raise ValueError(f"No config named '{name}'")
+
+
+def update_config_credential(name: str, key: str, value: str) -> int:
+    """
+    Update one credential value for an existing config, writing to
+    whichever place it actually lives - this config's own
+    config_credentials, or (for jira_url/jira_email/jira_api_token/
+    jira_project_key, when this config has a ticket_destination_id set) a
+    shared ticket_destinations row - same resolution get_config() already
+    does when READING, mirrored here for writing.
+
+    jira_project_key is a special case even among the destination-
+    resolved keys: it's ticket_destinations.project_key, a plain column,
+    not a ticket_destination_credentials row at all (see
+    create_ticket_destination()) - never encrypted, never looked up as a
+    credential key.
+
+    Returns how many OTHER configs also reference the same shared
+    destination (0 if this key isn't destination-resolved, or this config
+    has no ticket_destination_id) - the caller (gozu config edit) is
+    expected to warn/confirm before calling this at all when that count
+    is nonzero, since the change is genuinely shared, not scoped to just
+    this config. Raises ValueError if no config named `name` exists.
+    """
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT ticket_destination_id FROM configs WHERE name = %s", (name,))
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError(f"No config named '{name}'")
+        destination_id = row["ticket_destination_id"]
+
+    if key in _DESTINATION_RESOLVED_KEYS and destination_id is not None:
+        if key == "jira_project_key":
+            set_destination_project_key(destination_id, value)
+        else:
+            set_destination_credential(destination_id, key, value)
+        return count_configs_using_destination(destination_id, exclude_config_name=name)
+
+    set_credential(name, key, value)
+    return 0

@@ -100,3 +100,15 @@ class ScannerClient(ABC):
     def requirements(self) -> ScannerRequirements:
         """Docker services and host binaries this scanner needs to run."""
         raise NotImplementedError
+
+    @abstractmethod
+    def fetch_resolutions(self, finding_keys: list[str]) -> dict[str, str]:
+        """
+        Batch-check exactly these finding keys' current resolution in the
+        scanner backend - not a full re-fetch of every finding, callers
+        already know which keys they care about (see
+        temporal/activities/reconcile_resolved_findings.py). Returns
+        {key: resolution} only for keys that are now resolved; a key still
+        open is simply absent from the result, not mapped to None.
+        """
+        raise NotImplementedError
