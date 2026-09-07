@@ -113,13 +113,19 @@ def run(
     watch: bool = typer.Option(
         False,
         "--watch",
+        "-w",
         help="Keep running the scan cycle on a repeating interval instead of once and exiting - "
         "for backends with no push-based trigger (e.g. SonarQube Cloud Free).",
     ),
     interval: int = typer.Option(
-        300, "--interval", help="Seconds to wait between scan cycles - only meaningful together with --watch."
+        300,
+        "--interval",
+        "-i",
+        help="Seconds to wait between scan cycles - only meaningful together with --watch/-w.",
     ),
-    path: str = typer.Option(".", "--path", help="Path to the code to scan - defaults to the current directory."),
+    path: str = typer.Option(
+        ".", "--path", "-p", help="Path to the code to scan - defaults to the current directory."
+    ),
 ) -> None:
     """
     Run sonar-scanner against your code, wait for SonarQube to finish
