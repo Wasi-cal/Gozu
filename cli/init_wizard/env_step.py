@@ -6,8 +6,9 @@
 import questionary
 import typer
 
-from cli.init_wizard.prompts import ask_or_exit
-from cli.prerequisites import ensure_java
+from cli.prerequisites import ensure_java, ensure_sonar_scanner
+from cli.prompts import ask_or_exit
+from cli.status import error, waiting
 from scripts.bootstrap_env import (
     DEFAULT_PORTS,
     ENV_PATH,
@@ -39,7 +40,7 @@ def step_bootstrap_env() -> None:
     try:
         new_fields = bootstrap_env(port_overrides=overrides)
     except FernetKeySafetyError as e:
-        typer.secho(f"Refusing to continue: {e}", fg=typer.colors.RED)
+        error(f"Refusing to continue: {e}")
         raise typer.Exit(code=1) from e
 
     if new_fields:
@@ -53,7 +54,17 @@ def step_bootstrap_env() -> None:
     load_into_environ()
 
 
-def step_ensure_java() -> None:
-    """Only relevant for scanner_mode == "local" - Cloud never runs sonar-scanner on this host at all, so there's nothing to download for it."""
-    typer.echo("Checking prerequisites (Java, for sonar-scanner) ...")
+def step_ensure_prerequisites() -> None:
+    """
+    Both Local and Cloud configs run sonar-scanner on THIS host - Cloud
+    only means the scan target is SonarQube Cloud instead of a local
+    instance, the CLI tool doing the scanning is the same either way (see
+    cli/scan_runner/scanner_exec.py's _build_scanner_command(), which
+    calls ensure_sonar_scanner() unconditionally for both scanner_modes).
+    Resolving both here means neither is ever a surprise download during
+    someone's first `gozu run` - run_scan_cycle()'s own calls to these
+    stay in place too, as a defensive, idempotent fallback.
+    """
+    waiting("Checking prerequisites (Java, sonar-scanner) ...")
     ensure_java()
+    ensure_sonar_scanner()

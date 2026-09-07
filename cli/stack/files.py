@@ -38,6 +38,7 @@ from pathlib import Path
 
 import typer
 
+from cli.status import error
 from scripts.paths import STACK_DIR
 
 _ASSETS_PACKAGE = "cli.stack._stackfiles"
@@ -93,5 +94,5 @@ def is_initialized() -> bool:
 
 def require_initialized() -> None:
     if not is_initialized():
-        typer.secho("Stack not initialized - run `gozu init` first.", fg=typer.colors.RED)
+        error("Stack not initialized - run `gozu init` first.")
         raise typer.Exit(code=1)

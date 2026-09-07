@@ -11,8 +11,9 @@ Working name for the CLI/product; the repo directory is still called
 
 1. Code gets scanned (either you run `gozu run`, or SonarQube fires a webhook after its own analysis).
 2. A Temporal workflow fetches open findings from SonarQube.
-3. For each finding without an existing ticket (deduped by a Jira label), a ticket is created and dropped into the project's active sprint.
+3. For each finding without an existing ticket (deduped by a Jira label), a ticket is created and dropped into the project's active sprint - up to 30 new tickets per run; anything past that goes into one shared rollup ticket instead (see "Backlog cap" below).
 4. A screenshot of the flagged code in the SonarQube UI is captured and attached to the new ticket, along with an extracted code snippet as a comment.
+5. Any ticket whose underlying finding SonarQube now reports resolved gets automatically transitioned to done and commented on (see "Auto-closing resolved findings" below) - same run, not a separate step you have to trigger.
 
 Everything runs locally via Docker Compose - Postgres (config storage),
 Temporal, and optionally a local SonarQube. Jira is the only piece that has
@@ -32,6 +33,18 @@ Java/sonar-scanner (downloading portable copies into `~/.gozu/` if
 missing), and saves your scanner + Jira credentials as a named **config**
 in Postgres (encrypted at rest). Run it again to add more configs.
 
+Before saving, you'll see a review screen listing every answer you just
+gave (secrets masked to their last 4 characters) - pick any of them to
+correct it, or "Looks good - save" once everything looks right. Made a
+typo after `gozu init` already finished? `gozu config edit <name>` shows
+that same review screen again for an existing config, without needing to
+recreate it from scratch - see "Managing saved configs" below.
+
+`gozu status`/`gozu ports` are read-only checks - what's actually running
+right now, and which host port each service really landed on (`gozu
+init` auto-increments past whatever's already taken, so a service's real
+port can differ from its documented default).
+
 ## How a scan gets triggered
 
 Three ways, chosen per-config during `gozu init`:
@@ -47,6 +60,44 @@ starts one child workflow per branch under a parent
 (`MultiBranchScanWorkflow`), visible in the Temporal UI as a parent with
 child workflows. A webhook delivery only ever concerns one branch, so it
 never needs to fan out - the branch list just gates which deliveries proceed.
+
+## Auto-closing resolved findings
+
+On by default for every config, no setting to turn it off - every scan
+cycle, alongside ticket creation (not a separate trigger you have to run),
+gozu checks every ticket it's still tracking as open against SonarQube's
+current view of the underlying finding. If SonarQube now reports one of
+these resolutions instead of open/reopened:
+
+- **Fixed** - the underlying code issue was actually fixed
+- **Won't Fix** - marked as intentionally not going to be fixed
+- **False Positive** - marked as not a real issue
+- **Removed** - the issue no longer applies (e.g. the file/rule is gone)
+
+...the ticket gets moved to whatever transition in its own Jira workflow
+leads to a "done"-category status (gozu never assumes a fixed status name
+like "Done"/"Closed" - workflows differ per project), with a comment
+explaining why (e.g. "Closed automatically - SonarQube marked this False
+Positive"). If a ticket's current workflow has no transition into a
+"done" status available at all, gozu logs that and leaves it alone rather
+than guessing at the wrong transition.
+
+## Backlog cap
+
+Each run creates at most **30** new tickets for a given project (a scan
+against a brand-new/large codebase can otherwise return hundreds of
+findings, and Jira issue-creation isn't free). Anything past the first 30
+new findings doesn't get skipped - it's rolled into one shared "backlog"
+ticket (tagged `gozu-backlog-rollup`, distinct from the per-finding
+`source-key-{key}` labels) listing those findings' keys/rules/severities.
+
+That rollup ticket updates in place on every later run instead of a new
+one appearing each time: `--watch`/webhook mode re-runs against what's
+often the same persistent backlog, so a fresh scan finding the exact same
+80 leftover findings doesn't create an 81st "80 more findings" ticket - it
+edits the existing one. As more of the backlog gets ticketed for real in
+later runs (30 more each time), the rollup ticket's count goes back down,
+reaching 0 once the backlog's fully worked through.
 
 ## Project layout
 
@@ -74,15 +125,16 @@ scanner/                scanner backends
 
 ticket/                 ticket backends
   base.py                  TicketClient interface
-  jira_client.py            Jira implementation
+  jira_client.py            Jira implementation (incl. transitions, rollup ticket)
   jira_sprint.py            active-sprint lookup/assignment
+  claims.py                idempotency ledger + open/closed status (Postgres)
   adf.py                   Atlassian Document Format builders
   factory.py                build_ticket_client() / get_ticket_client()
 
 temporal/               Temporal workflows/activities/models
   worker.py                worker process entrypoint
   workflows/               ScanToTicketWorkflow, MultiBranchScanWorkflow
-  activities/               fetch findings, create tickets, screenshot
+  activities/               fetch findings, create tickets, reconcile resolved findings, screenshot
   models/                  per-activity Pydantic input models
 
 receiver/               Flask webhook receiver
@@ -141,11 +193,57 @@ Run `gozu init` a second time (a second repo, a second scanner config,
 whatever) and pick **Local or Cloud** as usual - when it gets to the Jira
 step, if a destination already exists you'll see "Use an existing ticket
 destination, or create a new one?" instead of being asked for a Jira
-URL/email/token again. Pick the existing one and the wizard skips straight
-to naming the config - zero Jira prompts. Both configs' tickets land on
-the same board, and dedupe (`ticket/claims.py`) still holds correctly
-across them, since it keys off the destination itself, not which config
-triggered the scan.
+URL/email/token again. Pick the existing one and there's nothing further
+to collect for it. Both configs' tickets land on the same board, and
+dedupe (`ticket/claims.py`) still holds correctly across them, since it
+keys off the destination itself, not which config triggered the scan.
+
+Creating a brand-new destination is deferred until you actually save on
+the final review screen (see "Managing saved configs" below) - answer its
+Jira URL/email/token/project key like any other field, keep editing other
+answers if you want, and the destination row only gets written to
+Postgres once you pick "Looks good - save". Nothing partial is left
+behind if you exit the wizard beforehand.
+
+Because a destination is shared, `gozu config edit` can later change its
+Jira credentials too - editing `jira_url`/`jira_email`/`jira_api_token`/
+`jira_project_key` on a config that uses a shared destination warns you
+how many *other* configs point at the same destination and asks for
+confirmation before writing, since the change isn't scoped to just the
+config you named.
+
+## Managing saved configs
+
+`gozu config` manages configs after `gozu init` has already created them,
+without needing to recreate one from scratch just to fix a value:
+
+```bash
+gozu config list                 # name, scanner type/mode, trigger mode - no secrets
+gozu config edit <name>          # fix a value on an existing config
+gozu config delete <name>        # permanently remove one config
+```
+
+`gozu config edit <name>` looks the config up, then shows the same
+review screen `gozu init` shows before its final save - every editable
+field listed with its current value (secrets masked to their last 4
+characters), pick one to correct it, "Looks good - save" once you're
+done. Only `project_key`, `branches`, the SonarQube token/organization,
+the webhook secret, and the Jira fields are offered - scanner
+type/mode, `sonar_plan`, and `trigger_mode` were decided once at `gozu
+init` time and can't be changed here. If nothing was actually changed,
+it says so and makes no writes at all; otherwise each changed field is
+written individually (`config/store.py`'s `update_config_fields()` for
+`project_key`/`branches`, `update_config_credential()` for everything
+else), with the shared-destination warning above surfacing first when it
+applies.
+
+`gozu config delete <name>` shows what it's about to delete (scanner
+type/mode, trigger mode, and whether its Jira credentials are embedded or
+a shared destination) before a single yes/no confirmation - not
+`--wipe`'s typed-word ritual, since this only ever touches one config's
+own rows (`config_credentials` cascades via its FK). It never deletes a
+referenced ticket destination, even if this was the last config using
+it - that's separate, out-of-scope surface for now.
 
 ## Development
 

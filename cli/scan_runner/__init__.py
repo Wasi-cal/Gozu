@@ -10,8 +10,6 @@ workflow directly - no webhook involved.
 
 import asyncio
 
-import typer
-
 from cli.prerequisites import ensure_java, ensure_sonar_scanner
 from cli.scan_runner.config_fields import scanner_host_url
 from cli.scan_runner.config_select import select_config
@@ -22,6 +20,7 @@ from cli.scan_runner.scanner_exec import (
     wait_for_analysis,
 )
 from cli.scan_runner.workflow_trigger import trigger_workflow
+from cli.status import waiting
 
 __all__ = ["run_scan_cycle", "select_config"]
 
@@ -45,14 +44,14 @@ def run_scan_cycle(config: dict, path: str) -> dict:
     # as its one implicit branch - see scanner_exec.py's _build_scanner_command().
     branch = detect_git_branch(path) if config.get("sonar_plan") == "premium" else None
 
-    typer.echo(f"Running sonar-scanner against {path} ...")
+    waiting(f"Running sonar-scanner against {path} ...")
     run_scanner(config, path, branch)
 
     ce_task_id = read_ce_task_id(path)
-    typer.echo(f"sonar-scanner finished; waiting for SonarQube analysis task {ce_task_id} ...")
+    waiting(f"sonar-scanner finished; waiting for SonarQube analysis task {ce_task_id} ...")
 
     wait_for_analysis(scanner_host_url(config), config["credentials"]["sonar_token"], ce_task_id)
-    typer.echo("Analysis finished - triggering ScanToTicketWorkflow ...")
+    waiting("Analysis finished - triggering ScanToTicketWorkflow ...")
 
     ticket_result = asyncio.run(trigger_workflow(config, ce_task_id, branch))
 

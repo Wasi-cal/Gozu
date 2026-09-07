@@ -44,6 +44,9 @@ class SonarQubeCloudClient(SonarQubeIssueFetcher, ScannerClient):
         # but the sonar-scanner CLI still needs a JVM to run.
         return ScannerRequirements(docker_services=[], host_dependencies=["java"])
 
+    def fetch_resolutions(self, finding_keys: list[str]) -> dict[str, str]:
+        return self.fetch_sonarqube_resolutions(finding_keys)
+
     def wait_for_latest_analysis(
         self,
         project_key: str,

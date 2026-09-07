@@ -75,3 +75,45 @@ def list_ticket_destinations() -> list[dict]:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT name, ticket_backend, project_key FROM ticket_destinations ORDER BY name")
         return cur.fetchall()
+
+
+def set_destination_credential(destination_id: int, key: str, value: str) -> None:
+    """Insert or update one credential on a ticket destination, encrypting `value` first - same shape as config/store.py's set_credential()."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ticket_destination_credentials (destination_id, key, value) VALUES (%s, %s, %s) "
+            "ON CONFLICT (destination_id, key) DO UPDATE SET value = EXCLUDED.value",
+            (destination_id, key, encrypt_token(value)),
+        )
+
+
+def set_destination_project_key(destination_id: int, project_key: str) -> None:
+    """
+    project_key lives as a plain column on ticket_destinations, not a
+    ticket_destination_credentials row (it isn't a secret - see
+    create_ticket_destination()) - config/store.py's get_config() reads it
+    as `credentials["jira_project_key"]` for any config referencing this
+    destination, but it's never encrypted or stored as a credential key.
+    """
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE ticket_destinations SET project_key = %s WHERE id = %s", (project_key, destination_id))
+
+
+def count_configs_using_destination(destination_id: int, exclude_config_name: str | None = None) -> int:
+    """
+    How many configs reference this destination - used before writing a
+    shared credential/project_key change, so a caller (gozu config edit)
+    can warn "this affects N other config(s)" rather than silently
+    mutating state other configs also depend on. `exclude_config_name`
+    leaves the config actually being edited out of its own count.
+    """
+    with get_connection() as conn, conn.cursor() as cur:
+        if exclude_config_name is not None:
+            cur.execute(
+                "SELECT count(*) AS count FROM configs WHERE ticket_destination_id = %s AND name != %s",
+                (destination_id, exclude_config_name),
+            )
+        else:
+            cur.execute("SELECT count(*) AS count FROM configs WHERE ticket_destination_id = %s", (destination_id,))
+        row = cur.fetchone()
+        return row["count"] if row else 0

@@ -6,56 +6,68 @@ Jira ticket-backend credential collection for the init wizard - either
 reuse an existing shared ticket_destinations row (config/ticket_destinations.py)
 so multiple configs can point at the same board without duplicating
 credentials, or create a new one.
+
+choose_jira_destination() is deliberately structural/one-shot (same
+category as scanner_mode/sonar_plan) and does NOT create anything itself
+- reusing an existing destination has nothing further to collect at all;
+creating a new one only decides that a destination WILL be created, with
+its fields (name, jira_url, jira_email, jira_api_token, jira_project_key)
+collected via cli/wizard_engine.py like every other value-level field, so
+they can be corrected on the review screen before anything is committed.
+The actual config_store.create_ticket_destination() call happens once,
+at final commit, in cli/init_wizard/__init__.py - not here.
 """
 
 import questionary
-import typer
 
 import config.store as config_store
-from cli.init_wizard.prompts import ask_or_exit, prompt_text
+from cli.prompts import ask_or_exit, prompt_text
+from cli.status import error
 
 _CREATE_NEW = "__create_new__"
 
 
-def _prompt_destination_name() -> str:
+def prompt_jira_url(default: str = "") -> str:
+    return prompt_text("Jira URL (e.g. https://your-domain.atlassian.net):", default=default)
+
+
+def prompt_jira_email(default: str = "") -> str:
+    return prompt_text("Jira account email:", field="jira_email", default=default)
+
+
+def prompt_jira_api_token(default: str = "") -> str:
+    return prompt_text("Jira API token:", field="jira_api_token", default=default)
+
+
+def prompt_jira_project_key(default: str = "") -> str:
+    return prompt_text("Jira project key:", field="jira_project_key", default=default)
+
+
+def prompt_destination_name() -> str:
     existing_names = {d["name"] for d in config_store.list_ticket_destinations()}
     while True:
         name = ask_or_exit(questionary.text("Name this ticket destination:")).strip()
         if not name:
-            typer.secho("Name can't be empty.", fg=typer.colors.RED)
+            error("Name can't be empty.")
             continue
         if name in existing_names:
-            typer.secho(f"A ticket destination named '{name}' already exists - choose another name.", fg=typer.colors.RED)
+            error(f"A ticket destination named '{name}' already exists - choose another name.")
             continue
         return name
 
 
-def _create_new_destination() -> int:
-    typer.secho("Jira details", bold=True)
-    credentials = {
-        "jira_url": prompt_text("Jira URL (e.g. https://your-domain.atlassian.net):"),
-        "jira_email": prompt_text("Jira account email:", field="jira_email"),
-        "jira_api_token": prompt_text("Jira API token:", field="jira_api_token"),
-    }
-    project_key = prompt_text("Jira project key:", field="jira_project_key")
-    name = _prompt_destination_name()
-
-    return config_store.create_ticket_destination(
-        name=name, ticket_backend="jira", project_key=project_key, credentials=credentials
-    )
-
-
-def collect_jira() -> int:
+def choose_jira_destination() -> tuple[str, int | None]:
     """
-    Returns the id of the ticket_destinations row this config should use -
-    either an existing one the user picked, or a freshly created one. New
-    configs always go through this path now; only pre-existing configs
-    still carry their Jira credentials embedded in their own
-    config_credentials (see config/store.py's get_config()).
+    Returns ("existing", destination_id) if the user picked one already
+    in the store - fully set up already, nothing more to collect for
+    Jira at all this run. Returns ("new", None) if creating one - the
+    caller is responsible for adding the new destination's fields to the
+    wizard's field list and committing them via create_ticket_destination()
+    itself once the review screen is done, not here.
     """
     destinations = config_store.list_ticket_destinations()
     if not destinations:
-        return _create_new_destination()
+        return "new", None
 
     choice = ask_or_exit(
         questionary.select(
@@ -65,9 +77,9 @@ def collect_jira() -> int:
         )
     )
     if choice == _CREATE_NEW:
-        return _create_new_destination()
+        return "new", None
 
     destination = config_store.get_ticket_destination(choice)
     if destination is None:
         raise RuntimeError(f"Ticket destination '{choice}' disappeared before it could be loaded.")
-    return destination["id"]
+    return "existing", destination["id"]

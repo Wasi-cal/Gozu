@@ -53,3 +53,9 @@ class CreatedTicket(BaseModel):
 class TicketResult(BaseModel):
     created: list[CreatedTicket] = []
     skipped: list[str] = []
+    # Findings that were new (no existing ticket) but didn't get one this
+    # run because create_tickets_activity's per-run backlog cap was
+    # already reached - distinct from `skipped`, which means "already
+    # ticketed", not "deferred". Rolled up into one shared ticket instead
+    # of one each - see JiraClient.upsert_rollup_ticket().
+    deferred: list[str] = []

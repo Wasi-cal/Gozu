@@ -20,6 +20,7 @@ from cli.prerequisites.archive import (
     verify_runnable,
 )
 from cli.prerequisites.java import java_env
+from cli.status import success, waiting
 from scripts.paths import GOZU_HOME
 
 SONAR_SCANNER_DIR = GOZU_HOME / "sonar-scanner"
@@ -79,7 +80,7 @@ def ensure_sonar_scanner() -> Path:
     typer.echo("sonar-scanner CLI wasn't found on this machine.")
     os_label = os_name({"Darwin": "macosx", "Linux": "linux", "Windows": "windows"})
     arch = arch_name()
-    typer.echo(f"Downloading sonar-scanner-cli {_SONAR_SCANNER_VERSION} ({os_label}/{arch}) into {SONAR_SCANNER_DIR} ...")
+    waiting(f"Downloading sonar-scanner-cli {_SONAR_SCANNER_VERSION} ({os_label}/{arch}) into {SONAR_SCANNER_DIR} ...")
 
     url = (
         f"https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/"
@@ -100,5 +101,5 @@ def ensure_sonar_scanner() -> Path:
     make_tree_executable(SONAR_SCANNER_DIR)
     verify_runnable(scanner_bin, "-v", env=java_env())
 
-    typer.secho(f"sonar-scanner ready: {scanner_bin}", fg=typer.colors.GREEN)
+    success(f"sonar-scanner ready: {scanner_bin}")
     return scanner_bin
