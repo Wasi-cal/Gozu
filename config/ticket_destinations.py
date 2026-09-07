@@ -1,7 +1,10 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Claude
 #
 # Depends on: PostgreSQL - data storage
+# Depends on: config/connection.py - gets a Postgres connection
+# Depends on: config/crypto.py - encrypts/decrypts credential values
 
 """
 CRUD for the `ticket_destinations` + `ticket_destination_credentials`

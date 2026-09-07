@@ -1,5 +1,8 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Claude
+#
+# Depends on: cli/stack/profiles.py - stopping whatever services this invocation started
 
 """
 Scoped SIGINT/SIGTERM/KeyboardInterrupt cleanup for commands that can

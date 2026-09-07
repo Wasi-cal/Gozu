@@ -1,7 +1,12 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Claude
 #
 # Depends on: PostgreSQL - data storage
+# Depends on: config/store.py - counting/reading rows before the destructive reset
+# Depends on: config/migrations.py - reapplying schema migrations after the reset
+# Depends on: cli/stack/backup.py - backing up the database before wiping it
+# Depends on: cli/stack/profiles.py - bringing Postgres up and stopping services around the wipe
 
 """`gozu down --wipe`'s destructive teardown: gathering what would be reset, confirming, then actually resetting it."""
 

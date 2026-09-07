@@ -1,7 +1,12 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Claude
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
+# Depends on: temporal/activities/fetch_findings.py - executes this activity to fetch findings
+# Depends on: temporal/activities/create_tickets.py - executes this activity to create tickets
+# Depends on: temporal/activities/reconcile_resolved_findings.py - executes this activity to auto-close resolved findings
+# Depends on: temporal/activities/capture_and_attach_screenshot.py - executes this activity to attach a screenshot to each created ticket
 
 """Workflow orchestrating the scan -> ticket pipeline, generic over which scanner/ticket backend is behind it."""
 

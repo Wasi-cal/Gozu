@@ -1,7 +1,9 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Claude
 #
 # Depends on: PostgreSQL - data storage
+# Depends on: config/connection.py - reads Postgres connection settings to build the Alembic DB URL
 
 """
 The single, authoritative path for creating and evolving gozu's own

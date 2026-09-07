@@ -1,5 +1,8 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Claude
+#
+# Depends on: cli/stack/profiles.py - reading each service's state/health to report on
 
 """`gozu up`/`gozu status`'s shared status summary - so knowing what's running never requires a separate `docker compose ps`/`docker ps` (and specifically surfaces "unhealthy" distinctly, not just "running")."""
 

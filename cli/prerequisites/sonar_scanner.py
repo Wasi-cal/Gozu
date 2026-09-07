@@ -1,6 +1,9 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty
+# Editor: Prakrit Mohanty, Claude
+#
+# Depends on: cli/prerequisites/archive.py - shared download/extract/verify helpers
+# Depends on: cli/prerequisites/java.py - the Java environment sonar-scanner runs under
 
 """Ensuring the sonar-scanner CLI is available on the host."""
 

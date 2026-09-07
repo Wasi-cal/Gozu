@@ -1,5 +1,11 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Claude
+#
+# Depends on: config/store.py - listing configs to decide which service profiles to activate
+# Depends on: config/migrations.py - applying schema migrations on `gozu up`/`down`
+# Depends on: cli/config_lookup.py - resolving a config name typed by the user
+# Depends on: scripts/env_ports.py - reading each service's resolved host port for `gozu ports`
 
 """
 `gozu up`/`gozu down` - bringing the local Docker Compose infrastructure

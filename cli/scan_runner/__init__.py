@@ -1,6 +1,9 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty
+# Editor: Prakrit Mohanty, Claude
+#
+# Depends on: config/store.py - persisting last-scan git state back to the config
+# Depends on: cli/prerequisites/__init__.py - ensuring Java/sonar-scanner are installed before scanning
 
 """
 `gozu run`'s actual logic: pick a config, run sonar-scanner, wait for

@@ -1,7 +1,10 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Claude
 #
 # Depends on: SonarQube (SonarSource) - direct API client
+# Depends on: scanner/base.py - resolve_container_host() for Docker container-host URL rewriting
+# Depends on: scanner/sonarqube_common.py - SonarQubeIssueFetcher mixin for issue fetch/classification
 
 """Real ScannerClient implementation for self-hosted SonarQube (Community Build, etc)."""
 

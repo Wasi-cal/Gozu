@@ -1,7 +1,9 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Claude
 #
 # Depends on: SonarQube (SonarSource) - direct API client
+# Depends on: scanner/sonarqube_classify.py - is_security_relevant() classification of raw issues
 
 """
 Shared issues-fetch logic for both SonarQube backends (self-hosted Server

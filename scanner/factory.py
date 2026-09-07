@@ -1,6 +1,9 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty
+# Editor: Prakrit Mohanty, Claude
+#
+# Depends on: scanner/sonarqube_cloud.py - dispatches to SonarQubeCloudClient for scanner_mode "cloud"
+# Depends on: scanner/sonarqube_server.py - dispatches to SonarQubeServerClient for scanner_mode "local"
 
 """Pure-builder + env-reading-wrapper pair for constructing a ScannerClient - see ticket/factory.py for the same pattern."""
 

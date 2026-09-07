@@ -1,8 +1,9 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty
+# Editor: Prakrit Mohanty, Claude
 #
 # Depends on: SonarQube (SonarSource) - direct API client
+# Depends on: scanner/sonarqube_common.py - SonarQubeIssueFetcher mixin for issue fetch/classification
 
 """
 ScannerClient implementation for SonarQube Cloud.

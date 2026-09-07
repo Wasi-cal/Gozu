@@ -1,6 +1,10 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty
+# Editor: Prakrit Mohanty, Claude
+#
+# Depends on: config/store.py - listing/looking up saved configs
+# Depends on: cli/config_lookup.py - resolving a config name typed by the user
+# Depends on: cli/stack/__init__.py - ensuring the config store is ready before use
 
 """Resolving which saved config `gozu run` should use."""
 

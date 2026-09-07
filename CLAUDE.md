@@ -156,6 +156,17 @@ line), before everything else - including a module docstring - otherwise.
   to one. No language implying partnership, endorsement, or certification
   by the third party - state the dependency, nothing more. Most files get
   no dependency line at all; don't force one in where it doesn't apply.
+- **In-house dependency line(s)** (same block, one line per dependency):
+  a file with a genuine load-bearing dependency on another module
+  *within this repo* also gets its own "Depends on: <repo-relative file
+  path> - what for" line - e.g. "Depends on: config/store.py - reads/
+  writes the configs table". Repo-relative file path, not an import
+  statement or module dotted-path. Same bar as the vendor line above:
+  only the specific module(s) a file is actually built on top of to do
+  its own job (what it calls into), not every module it happens to
+  import - a shared status/glyph/constants helper doesn't count. One
+  line per dependency when there's more than one. Most files still get
+  none.
 - Markdown files (`README.md`, `ARCHITECTURE.md`, this file) are
   deliberately excluded - no comment syntax was ever specified for them,
   and guessing one (e.g. an HTML comment block) isn't this convention's

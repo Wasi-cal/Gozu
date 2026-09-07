@@ -1,7 +1,10 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Claude
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
+# Depends on: ticket/claims.py - ledger-based dedupe/claim of finding-to-ticket assignments
+# Depends on: ticket/factory.py - builds/gets the ticket client used to create tickets
 
 """Activity: create a ticket for each finding that doesn't already have one."""
 

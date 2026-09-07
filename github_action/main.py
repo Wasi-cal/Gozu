@@ -1,8 +1,12 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Prakrit Mohanty
+# Editor: Claude
 #
 # Depends on: SonarQube (SonarSource) - direct API client
 # Depends on: Jira (Atlassian) - ticket creation
+# Depends on: scanner/factory.py - builds the scanner client from env vars
+# Depends on: scanner/screenshot.py - renders a finding's code snippet for the ticket attachment
+# Depends on: ticket/factory.py - builds the ticket client from env vars
 
 """
 Entrypoint for the standalone GitHub Action

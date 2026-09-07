@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty
+# Editor: Prakrit Mohanty, Claude
+#
+# Depends on: config/store.py - creates/reads/deletes the test config it round-trips
 
 """
 Throwaway verification script - NOT part of the product (the real way to

@@ -1,5 +1,8 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Claude
+#
+# Depends on: config/store.py - looking up and listing saved configs
 
 """
 Shared "a --config <name> was given but doesn't match anything" recovery,

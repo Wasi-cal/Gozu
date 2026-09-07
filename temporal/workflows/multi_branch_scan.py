@@ -1,8 +1,9 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty
+# Editor: Prakrit Mohanty, Claude
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
+# Depends on: temporal/workflows/scan_to_ticket.py - fans out into this workflow as a per-branch child
 
 """
 Workflow for a multi-branch config's manual/direct scan (`gozu run`):

@@ -1,8 +1,9 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty
+# Editor: Prakrit Mohanty, Claude
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
+# Depends on: temporal/data_converter.py - Pydantic-aware data converter required to serialize workflow/activity payloads
 
 import asyncio
 import logging

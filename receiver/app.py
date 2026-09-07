@@ -1,6 +1,10 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty
+# Editor: Prakrit Mohanty, Claude
+#
+# Depends on: config/store.py - looks up a config's credentials/settings by name
+# Depends on: receiver/starter.py - starts ScanToTicketWorkflow for a verified webhook
+# Depends on: receiver/verify_signature.py - verifies the webhook's HMAC signature
 
 """
 Flask webhook receiver for SonarQube - multi-config routing (Phase 4).

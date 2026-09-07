@@ -1,5 +1,11 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Claude
+#
+# Depends on: config/store.py - listing/deleting saved configs
+# Depends on: cli/config_lookup.py - resolving a config name typed by the user
+# Depends on: cli/stack/__init__.py - ensuring the config store is ready before use
+# Depends on: cli/stack/backup.py - backing up the database before a destructive delete
 
 """
 `gozu config list/edit/delete` - managing saved configs after `gozu init`

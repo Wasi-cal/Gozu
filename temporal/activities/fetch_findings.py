@@ -1,7 +1,9 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Claude
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
+# Depends on: scanner/factory.py - builds/gets the scanner client used to fetch findings
 
 """Activity: fetch findings for a project via the ScannerClient interface."""
 

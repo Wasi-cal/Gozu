@@ -1,5 +1,14 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Claude
+#
+# Depends on: config/store.py - reading and updating a config's fields/credentials
+# Depends on: cli/config_lookup.py - resolving a config name typed by the user
+# Depends on: cli/init_wizard/jira_step.py - reusing its Jira credential prompt functions
+# Depends on: cli/init_wizard/sonar_cloud.py - reusing its SonarQube Cloud credential prompt functions
+# Depends on: cli/init_wizard/sonar_local.py - reusing its SonarQube Local credential prompt functions
+# Depends on: cli/stack/__init__.py - ensuring the config store is ready before editing
+# Depends on: cli/wizard_engine.py - the shared review/edit engine this command drives
 
 """
 `gozu config edit <name>` - reuses cli/wizard_engine.py, the same

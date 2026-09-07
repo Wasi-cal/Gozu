@@ -1,8 +1,10 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Prakrit Mohanty
-# Editor: Wasiullah Rafeeq S
+# Editor: Wasiullah Rafeeq S, Claude
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
+# Depends on: scanner/screenshot.py - renders the syntax-highlighted finding snippet
+# Depends on: ticket/factory.py - builds/gets the ticket client used to attach the screenshot and comment
 
 """Activity: render a syntax-highlighted source snippet for a finding and attach it to its ticket."""
 

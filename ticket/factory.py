@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty
+# Editor: Prakrit Mohanty, Claude
+#
+# Depends on: ticket/jira_client.py - dispatches to JiraClient for ticket_backend "jira"
 
 """
 Pure-builder + env-reading-wrapper pair for constructing a TicketClient -

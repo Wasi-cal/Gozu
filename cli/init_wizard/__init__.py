@@ -1,6 +1,14 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty
+# Editor: Prakrit Mohanty, Claude
+#
+# Depends on: config/store.py - creating/reading configs and ticket destinations
+# Depends on: config/migrations.py - applying schema migrations before first use
+# Depends on: cli/stack/cleanup.py - scoping interrupt cleanup to services this run starts
+# Depends on: cli/stack/files.py - materializing the Docker stack before use
+# Depends on: cli/stack/profiles.py - bringing Postgres up before saving a config
+# Depends on: cli/wizard_engine.py - the shared review/edit engine this wizard drives
+# Depends on: scanner/base.py - listing the registered scanner types to choose from
 
 """
 `gozu init` - the interactive setup wizard. Provisions .env, checks/

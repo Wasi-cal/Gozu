@@ -1,7 +1,14 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Claude
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
+# Depends on: temporal/data_converter.py - the Pydantic-aware data converter and task queue name
+# Depends on: temporal/models/sonar_to_jira.py - the workflow input this file constructs
+# Depends on: temporal/models/reconcile_resolved_findings.py - the reconcile-only workflow input this file constructs
+# Depends on: temporal/workflows/multi_branch_scan.py - the multi-branch workflow this file starts
+# Depends on: temporal/workflows/reconcile_only.py - the reconcile-only workflow this file starts
+# Depends on: temporal/workflows/scan_to_ticket.py - the single-branch workflow this file starts
 
 """Starting the Temporal workflow once SonarQube's analysis has finished."""
 
