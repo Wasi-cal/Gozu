@@ -2,7 +2,7 @@
 
 This is the quick path for getting `gozu` installed and scanning a project
 on any machine — yours, a friend's, whatever. For how the tool works
-internally, see `EXPLAINER.md`. For the source-checkout developer flow
+internally, see `ARCHITECTURE.md`. For the source-checkout developer flow
 (`git clone` + `uv sync`), see `README.md`.
 
 ## 1. Requirements

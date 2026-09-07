@@ -14,18 +14,21 @@ WORKDIR /app
 
 COPY --from=uv /uv /uvx /usr/local/bin/
 
+# scanner/screenshot.py's render_finding_snippet() needs Pygments'
+# ImageFormatter to find an actual monospace font - confirmed live that
+# python:3.12-slim has neither fontconfig (`fc-list`) nor any font at
+# all, which makes ImageFormatter raise FileNotFoundError outright, not
+# just render ugly. fonts-dejavu-core is the specific package that
+# provides DejaVu Sans Mono, the font ImageFormatter looks for first;
+# both packages together add a few MB, nowhere near what the Chromium
+# install this replaced used to cost.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        fontconfig fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-group dev
-
-# scanner/screenshot.py needs an actual Chromium binary - --with-deps also
-# installs the OS-level libs (fonts, etc) python:3.12-slim doesn't have,
-# without which even a present binary fails to launch headless. Placed
-# before `COPY . .` deliberately: it only depends on the playwright version
-# pinned in uv.lock, not on our own source - keeping it here means a
-# source-only change doesn't force a ~90s apt-get + Chromium re-download
-# on every rebuild.
-RUN playwright install --with-deps chromium
 
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \

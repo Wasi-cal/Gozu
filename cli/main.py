@@ -126,6 +126,14 @@ def run(
         "committed-and-clean checkout: a non-git directory, or one whose caller never commits, gets no "
         "benefit and just scans normally, as if this flag were never passed. Off by default.",
     ),
+    ticket_cap: int = typer.Option(
+        None,
+        "--ticket-cap",
+        "-t",
+        help="Override the per-run cap on genuinely new tickets for THIS invocation only - never written to "
+        "the saved config. Takes priority over the config's own persistent default (set via "
+        "`gozu config edit`); with neither set, falls back to the built-in default (30).",
+    ),
 ) -> None:
     """
     Run sonar-scanner against your code, wait for SonarQube to finish
@@ -139,7 +147,7 @@ def run(
 
     if not watch:
         start = time.monotonic()
-        ce_task_id, branches, ticket_result = run_scan_cycle(selected, path, skip_unchanged)
+        ce_task_id, branches, ticket_result = run_scan_cycle(selected, path, skip_unchanged, ticket_cap)
         render_run_report(selected["name"], branches, ce_task_id, ticket_result, time.monotonic() - start)
         return
 
@@ -147,7 +155,7 @@ def run(
     try:
         while True:
             start = time.monotonic()
-            ce_task_id, branches, ticket_result = run_scan_cycle(selected, path, skip_unchanged)
+            ce_task_id, branches, ticket_result = run_scan_cycle(selected, path, skip_unchanged, ticket_cap)
             render_run_report(selected["name"], branches, ce_task_id, ticket_result, time.monotonic() - start)
             time.sleep(interval)
     except KeyboardInterrupt:

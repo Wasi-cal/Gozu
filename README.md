@@ -11,8 +11,8 @@ Working name for the CLI/product; the repo directory is still called
 
 1. Code gets scanned (either you run `gozu run`, or SonarQube fires a webhook after its own analysis).
 2. A Temporal workflow fetches open findings from SonarQube.
-3. For each finding without an existing ticket (deduped by a Jira label), a ticket is created and dropped into the project's active sprint - up to 30 new tickets per run; anything past that goes into one shared rollup ticket instead (see "Backlog cap" below).
-4. A screenshot of the flagged code in the SonarQube UI is captured and attached to the new ticket, along with an extracted code snippet as a comment.
+3. For each finding without an existing ticket (deduped by a Jira label), a ticket is created and dropped into the project's active sprint - up to a per-run cap of new tickets (30 by default, see "Backlog cap" below); anything past that goes into one shared rollup ticket instead.
+4. A syntax-highlighted PNG of the source lines around the flagged line is rendered (server-side, via [Pygments](https://pygments.org/) against SonarQube's own `/api/sources/lines` - no browser involved) and attached to the new ticket, with the finding's own message posted as a comment.
 5. Any ticket whose underlying finding SonarQube now reports resolved gets automatically transitioned to done and commented on (see "Auto-closing resolved findings" below) - same run, not a separate step you have to trigger.
 
 Everything runs locally via Docker Compose - Postgres (config storage),
@@ -180,10 +180,10 @@ were never passed. That's expected, not a bug: there's no reliable
 
 ## Backlog cap
 
-Each run creates at most **30** new tickets for a given project (a scan
-against a brand-new/large codebase can otherwise return hundreds of
-findings, and Jira issue-creation isn't free). Anything past the first 30
-new findings doesn't get skipped - it's rolled into one shared "backlog"
+Each run creates at most **30** new tickets for a given project by
+default (a scan against a brand-new/large codebase can otherwise return
+hundreds of findings, and Jira issue-creation isn't free). Anything past
+the cap doesn't get skipped - it's rolled into one shared "backlog"
 ticket (tagged `gozu-backlog-rollup`, distinct from the per-finding
 `source-key-{key}` labels) listing those findings' keys/rules/severities.
 
@@ -192,8 +192,30 @@ one appearing each time: `--watch`/webhook mode re-runs against what's
 often the same persistent backlog, so a fresh scan finding the exact same
 80 leftover findings doesn't create an 81st "80 more findings" ticket - it
 edits the existing one. As more of the backlog gets ticketed for real in
-later runs (30 more each time), the rollup ticket's count goes back down,
-reaching 0 once the backlog's fully worked through.
+later runs (the cap's worth each time), the rollup ticket's count goes
+back down, reaching 0 once the backlog's fully worked through.
+
+### Changing the cap
+
+Two independent ways to override the default of 30, for different
+purposes:
+
+- **`gozu config edit <name>`** sets a *persistent* per-config default -
+  every future `gozu run`/`--watch` cycle/webhook trigger for that config
+  uses it, until changed again. Leave it blank to go back to "use the
+  default" - this isn't the same as explicitly setting it to some
+  specific number that happens to match today's default; a blank value
+  means the config never overrides the built-in default at all, so a
+  future change to that built-in default takes effect for it
+  automatically.
+- **`gozu run --ticket-cap`/`-t`** is a *one-off* override for that single
+  invocation only - it's never written back to the config, so the very
+  next run (with or without `-t`) goes back to whatever the config's own
+  persistent default resolves to. Takes priority over the config's
+  stored value when both are given.
+
+With neither set, the built-in default (30) applies - unchanged from
+before this was configurable at all.
 
 ## Project layout
 
@@ -217,7 +239,7 @@ scanner/                scanner backends
   sonarqube_server.py       self-hosted SonarQube
   sonarqube_cloud.py        SonarQube Cloud (stub)
   factory.py                build_scanner_client() / get_scanner_client()
-  screenshot.py            Playwright: screenshot + code extraction
+  screenshot.py            Pygments: renders a syntax-highlighted source snippet PNG
 
 ticket/                 ticket backends
   base.py                  TicketClient interface

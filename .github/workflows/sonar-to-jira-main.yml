@@ -49,9 +49,6 @@ jobs:
       - name: Install gozu
         run: pip install .
 
-      - name: Install Playwright's Chromium
-        run: playwright install --with-deps chromium
-
       - name: Wait for analysis and create Jira tickets
         env:
           SCANNER_TYPE: sonarqube-cloud

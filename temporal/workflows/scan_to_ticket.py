@@ -77,7 +77,12 @@ class ScanToTicketWorkflow:
 
         ticket_result = await workflow.execute_activity(
             create_tickets_activity,
-            CreateTicketsInput(findings=findings, ticket_backend=input.ticket_backend, credentials=input.credentials),
+            CreateTicketsInput(
+                findings=findings,
+                ticket_backend=input.ticket_backend,
+                credentials=input.credentials,
+                ticket_cap=input.ticket_cap,
+            ),
             start_to_close_timeout=timedelta(seconds=30),
             # TicketAuthError (invalid/expired Jira token) and
             # TicketValidationError (a permanently malformed request - bad
@@ -165,17 +170,21 @@ class ScanToTicketWorkflow:
                         # attach_screenshot()/add_comment() calls this
                         # activity makes are permanent, same reasoning as
                         # create_tickets_activity - never fixed by
-                        # retrying. Everything else that can propagate
-                        # here (Playwright navigation/timeout failures -
-                        # scanner/screenshot.py's page.goto()/page.screenshot()
-                        # calls; the best-effort text extraction helpers
-                        # already degrade to None rather than raising) is
-                        # transient network/timing, so it stays on the
-                        # normal retryable path. maximum_attempts stays at
-                        # 2, unchanged - this is a best-effort bonus
-                        # feature (asyncio.gather(return_exceptions=True)
-                        # below), never worth retrying as hard as a real
-                        # pipeline step.
+                        # retrying. A snippet-rendering failure itself
+                        # (scanner/screenshot.py's render_finding_snippet()
+                        # - a bad SonarQube response, no matching Pygments
+                        # lexer, ...) never even reaches this policy at all
+                        # anymore: the activity catches it internally,
+                        # logs which finding and why, and returns normally
+                        # rather than failing - see
+                        # capture_and_attach_screenshot_activity. What's
+                        # left to retry here is genuinely transient
+                        # network/timing on the Jira calls themselves.
+                        # maximum_attempts stays at 2, unchanged - this is
+                        # a best-effort bonus feature
+                        # (asyncio.gather(return_exceptions=True) below),
+                        # never worth retrying as hard as a real pipeline
+                        # step.
                         retry_policy=RetryPolicy(
                             maximum_attempts=2,
                             non_retryable_error_types=["TicketAuthError", "TicketValidationError"],

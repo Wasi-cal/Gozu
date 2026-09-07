@@ -35,7 +35,7 @@ from pathlib import Path
 
 from core.models import Finding
 from scanner.factory import get_scanner_client
-from scanner.screenshot import capture_finding_screenshot
+from scanner.screenshot import render_finding_snippet
 from ticket.factory import get_ticket_client
 
 logging.basicConfig(level=logging.INFO)
@@ -53,26 +53,39 @@ def _write_step_summary(text: str) -> None:
 
 
 async def _capture_and_attach(client, finding: Finding, ticket_key: str, sonar_token: str) -> None:
-    """Mirrors temporal/activities/capture_and_attach_screenshot.py's activity body - no Temporal context here."""
-    tmp_dir = tempfile.mkdtemp(prefix="finding-screenshot-")
-    screenshot_path = Path(tmp_dir) / f"{finding.source_tool}-{finding.key}.png"
+    """
+    Mirrors temporal/activities/capture_and_attach_screenshot.py's
+    activity body - no Temporal context here. Two independent
+    best-effort pieces, not one all-or-nothing unit: the comment
+    (finding.message, nothing scraped) and the rendered-snippet
+    attachment - a snippet-rendering failure is logged clearly (which
+    finding, why) and doesn't prevent the comment or fail this entrypoint.
+    """
+    add_comment = getattr(client, "add_comment", None)
+    if add_comment is not None:
+        add_comment(ticket_key, finding.message)
+    else:
+        logger.warning(f"{type(client).__name__} doesn't support add_comment; skipping comment for {ticket_key}")
+
+    attach_screenshot = getattr(client, "attach_screenshot", None)
+    if attach_screenshot is None:
+        logger.warning(f"{type(client).__name__} doesn't support attach_screenshot; skipping for {ticket_key}")
+        return
 
     try:
-        extraction = await capture_finding_screenshot(finding, screenshot_path, sonar_token)
+        png_bytes = render_finding_snippet(finding, sonar_token)
+    except Exception as e:
+        logger.warning(
+            f"Snippet rendering failed for finding {finding.key} (ticket {ticket_key}): {e} - "
+            "ticket already created, continuing without a snippet attachment"
+        )
+        return
 
-        attach_screenshot = getattr(client, "attach_screenshot", None)
-        if attach_screenshot is not None:
-            attach_screenshot(ticket_key, extraction.screenshot_path)
-        else:
-            logger.warning(f"{type(client).__name__} doesn't support attach_screenshot; skipping for {ticket_key}")
-
-        if extraction.code_snippet or extraction.annotation_text:
-            add_comment = getattr(client, "add_comment", None)
-            if add_comment is not None:
-                body_lines = [t for t in (extraction.annotation_text, extraction.code_snippet) if t]
-                add_comment(ticket_key, "\n\n".join(body_lines))
-            else:
-                logger.warning(f"{type(client).__name__} doesn't support add_comment; skipping comment for {ticket_key}")
+    tmp_dir = tempfile.mkdtemp(prefix="finding-snippet-")
+    try:
+        snippet_path = Path(tmp_dir) / f"{finding.source_tool}-{finding.key}.png"
+        snippet_path.write_bytes(png_bytes)
+        attach_screenshot(ticket_key, snippet_path)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 

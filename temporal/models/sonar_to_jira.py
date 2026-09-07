@@ -33,3 +33,13 @@ class SonarToJiraInput(BaseModel):
     # either) falls back to that same, structurally-limited in-container
     # attempt for backward compatibility, not because it's expected to work.
     branch: str | None = None
+
+    # The EFFECTIVE per-run new-ticket cap, already resolved by the CLI
+    # (cli/scan_runner/__init__.py's run_scan_cycle()) from whichever of
+    # --ticket-cap (a one-off override, never persisted) or the config's
+    # own stored `ticket_cap` (migrations/versions/0008_add_ticket_cap.py)
+    # applies - None here means neither was set, and
+    # create_tickets_activity falls back to its own BACKLOG_CAP constant.
+    # This model never re-resolves the two itself; by the time it's built,
+    # that decision has already been made once, client-side.
+    ticket_cap: int | None = None
