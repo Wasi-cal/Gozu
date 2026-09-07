@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Claude
 #
 # Depends on: scanner/base.py - resolve_container_host() for Docker container-host URL rewriting
 

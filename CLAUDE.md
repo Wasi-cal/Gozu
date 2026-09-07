@@ -146,7 +146,13 @@ line), before everything else - including a module docstring - otherwise.
   omit the line entirely if there isn't one yet. When someone other than
   the original author changes an existing file, add their name to the
   Editor line if it isn't already there (comma-separate multiple
-  editors); don't touch Author once it's set.
+  editors); don't touch Author once it's set. Same rule as Author:
+  real people only, by their real name (check the git identity/context
+  for this repo) - never "Claude", even when Claude is the one literally
+  typing the edit. Claude is a tool the person is using, not a credited
+  contributor. If the resulting editor would be the same person as
+  Author, don't add an Editor line at all - that's already covered by
+  Author.
 - **Dependency line** (optional, added under a blank `#`): a factual,
   one-line "Depends on: X (Vendor) - what for" note, ONLY for a file that
   directly talks to one of the four things this product's identity

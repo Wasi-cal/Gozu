@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Claude
 #
 # Depends on: config/store.py - listing existing ticket destinations to offer for reuse
 

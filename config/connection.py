@@ -36,7 +36,20 @@ def get_connection() -> psycopg.Connection[dict[str, Any]]:
     # type checker (mypy accepts it; pyright doesn't). Parameterizing
     # `Connection` explicitly before `.connect(...)` resolves `Self`
     # correctly for both.
+    #
+    # Named individually rather than `**env_settings()` - spreading a
+    # dict[str, str] makes pyright check that `str` against every other
+    # keyword param `connect()` accepts (autocommit: bool,
+    # prepare_threshold: int | None, context: AdaptContext | None, ...),
+    # since any of those could in principle be filled from an arbitrary
+    # str key in the dict. Passing the five keys by name only checks
+    # each against its own (str-compatible) parameter.
+    settings = env_settings()
     return psycopg.Connection[dict[str, Any]].connect(
-        **env_settings(),
+        host=settings["host"],
+        port=settings["port"],
+        user=settings["user"],
+        password=settings["password"],
+        dbname=settings["dbname"],
         row_factory=dict_row,
     )

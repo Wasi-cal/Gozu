@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty, Claude
+# Editor: Prakrit Mohanty
 #
 # Depends on: cli/stack/cleanup.py - tracking SonarQube for interrupt cleanup if started fresh
 # Depends on: cli/stack/profiles.py - starting gozu's managed SonarQube service

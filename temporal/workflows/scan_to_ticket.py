@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Claude
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
 # Depends on: temporal/activities/fetch_findings.py - executes this activity to fetch findings

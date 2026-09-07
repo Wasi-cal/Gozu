@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Claude
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
 # Depends on: temporal/activities/reconcile_resolved_findings.py - executes this activity to auto-close resolved findings

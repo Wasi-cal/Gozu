@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Claude
 #
 # Depends on: Jira (Atlassian) - direct API client
 # Depends on: ticket/adf.py - ADF document builders for issue descriptions/comments

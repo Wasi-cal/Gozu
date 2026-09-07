@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Claude
 #
 # Depends on: cli/prerequisites/__init__.py - ensuring sonar-scanner is installed and its Java env
 

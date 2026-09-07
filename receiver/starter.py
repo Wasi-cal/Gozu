@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Claude
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
 # Depends on: temporal/data_converter.py - data converter and task queue used to connect/start the workflow

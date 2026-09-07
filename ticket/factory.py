@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty, Claude
+# Editor: Prakrit Mohanty
 #
 # Depends on: ticket/jira_client.py - dispatches to JiraClient for ticket_backend "jira"
 

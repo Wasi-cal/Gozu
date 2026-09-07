@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty, Claude
+# Editor: Prakrit Mohanty
 #
 # Depends on: PostgreSQL - data storage
 # Depends on: config/connection.py - gets a Postgres connection

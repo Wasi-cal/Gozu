@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty, Claude
+# Editor: Prakrit Mohanty
 #
 # Depends on: config/store.py - creating/reading configs and ticket destinations
 # Depends on: config/migrations.py - applying schema migrations before first use

@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty, Claude
+# Editor: Prakrit Mohanty
 #
 # Depends on: config/store.py - looks up a config's credentials/settings by name
 # Depends on: receiver/starter.py - starts ScanToTicketWorkflow for a verified webhook

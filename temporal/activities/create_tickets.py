@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Claude
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
 # Depends on: ticket/claims.py - ledger-based dedupe/claim of finding-to-ticket assignments

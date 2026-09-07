@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Prakrit Mohanty
-# Editor: Claude
+# Editor: Wasiullah Rafeeq S
 #
 # Depends on: SonarQube (SonarSource) - direct API client
 # Depends on: Jira (Atlassian) - ticket creation

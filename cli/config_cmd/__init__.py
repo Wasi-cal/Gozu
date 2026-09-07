@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Claude
 #
 # Depends on: config/store.py - listing/deleting saved configs
 # Depends on: cli/config_lookup.py - resolving a config name typed by the user

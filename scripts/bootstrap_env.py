@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty, Claude
+# Editor: Prakrit Mohanty
 #
 # Depends on: scripts/env_ports.py - port resolution and .env parsing
 # Depends on: scripts/fernet_safety.py - safety check before generating a new FERNET_KEY

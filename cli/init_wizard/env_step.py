@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Claude
 #
 # Depends on: cli/prerequisites/__init__.py - ensuring Java/sonar-scanner are installed
 # Depends on: scripts/bootstrap_env.py - writing/loading .env fields and resolving ports

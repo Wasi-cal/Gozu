@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Prakrit Mohanty
-# Editor: Wasiullah Rafeeq S, Claude
+# Editor: Wasiullah Rafeeq S
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
 # Depends on: scanner/screenshot.py - renders the syntax-highlighted finding snippet

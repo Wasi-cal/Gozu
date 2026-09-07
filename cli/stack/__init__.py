@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Claude
 #
 # Depends on: config/store.py - listing configs to decide which service profiles to activate
 # Depends on: config/migrations.py - applying schema migrations on `gozu up`/`down`
