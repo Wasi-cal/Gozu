@@ -1,153 +1,137 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
-# Editor: Prakrit Mohanty
 
 """
-Captures a screenshot of a SonarQube finding's source-viewer panel using
-Playwright, plus (best-effort) the flagged code and SonarQube's inline
-issue annotation as text.
+Renders a syntax-highlighted PNG snippet of the source lines around a
+finding, server-side via Pygments - no browser/headless Chromium
+involved at all. Replaces an earlier Playwright-based implementation
+that screenshotted SonarQube's own web UI; that approach is gone
+entirely (see git history if you need it), not kept alongside this one.
 
-Uses Playwright's async API rather than its sync API (unlike the rest of
-this codebase, which calls `requests` synchronously from inside `async def`
-Temporal activities): the sync API raises if called from a thread that
-already has a running asyncio event loop, which is exactly the situation
-inside a Temporal activity coroutine.
+render_finding_snippet() fetches the raw source lines directly from
+SonarQube's REST API (/api/sources/lines), not by rendering any page -
+this process was already able to make that same authenticated call for
+everything else (scanner/sonarqube_common.py), so this needed no new
+capability, just a new endpoint.
 
-Auth is a plain "Authorization: Basic" header set via `extra_http_headers`,
-not Playwright's `http_credentials` context option. `http_credentials` only
-attaches credentials after the server responds 401 to an unauthenticated
-request; SonarQube's web app always serves its SPA shell with a 200 (auth
-state is then resolved client-side), so that challenge never happens and
-`http_credentials` silently never sends the header at all - confirmed live,
-it renders the login page. Forcing the header on every request sidesteps
-that entirely.
-
-Not part of the generic ScannerClient contract - it's a SonarQube-specific
-bonus capability (Sonar's deep-link URL shape, token-based Basic auth), called
-directly by the screenshot activity rather than through get_scanner_client().
+The annotation text SonarQube's own UI showed alongside the snippet
+(the old Playwright code scraped it from the rendered DOM) is simply
+`finding.message` now - the exact same string the API already gave us
+when the finding was first fetched, never scraped from anywhere.
 """
 
-import asyncio
-import base64
-from pathlib import Path
+import io
+from html.parser import HTMLParser
+from urllib.parse import urlsplit
 
-from playwright.async_api import BrowserContext, async_playwright
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-from pydantic import BaseModel
-from temporalio import activity
+import requests
+from pygments import lexers
+from pygments.formatters import ImageFormatter
+from pygments.util import ClassNotFound
 
 from core.models import Finding
 from scanner.base import resolve_container_host
 
-_SOURCE_VIEWER_SELECTORS = [
-    "table",
-    '[data-testid="source-viewer"]',
-    ".source-viewer",
-]
+DEFAULT_CONTEXT_LINES = 5
 
 
-class FindingExtraction(BaseModel):
-    screenshot_path: Path
-    code_snippet: str | None
-    annotation_text: str | None
-
-
-_playwright = None
-_browser = None
-_contexts_by_token: dict[str, BrowserContext] = {}
-_init_lock = asyncio.Lock()
-
-
-async def _get_context(token: str) -> BrowserContext:
+class _HTMLTextExtractor(HTMLParser):
     """
-    One shared Browser for the life of the worker process (one launch
-    total), but one Context per distinct token - different configs
-    (`gozu run` against different SonarQube instances/accounts) need
-    different Basic-auth headers, and a Context's extra_http_headers are
-    fixed at creation time.
+    SonarQube's /api/sources/lines returns each line's `code` field
+    pre-marked-up with ITS OWN syntax-highlighting spans (confirmed
+    live: e.g. `<span class="k">import</span> <span class="sym-1
+    sym">hashlib</span>`), not plain text - Pygments does its own
+    highlighting from scratch and needs the raw source, so this strips
+    every tag and keeps only the text content. HTMLParser's default
+    convert_charrefs=True already decodes entities (&amp; -> &, etc) in
+    the text handed to handle_data(), so no separate unescape step
+    is needed.
     """
-    global _playwright, _browser
 
-    async with _init_lock:
-        if _browser is None:
-            _playwright = await async_playwright().start()
-            _browser = await _playwright.chromium.launch()
+    def __init__(self) -> None:
+        super().__init__()
+        self._parts: list[str] = []
 
-        if token not in _contexts_by_token:
-            auth = base64.b64encode(f"{token}:".encode()).decode()
-            # A short viewport clips the source-code table before it's fully
-            # rendered/scrolled into view, so `table.screenshot()` can capture
-            # a mostly-empty region (e.g. just the inline issue annotation,
-            # with the flagged code line itself out of frame). A generously
-            # tall viewport avoids needing to scroll at all.
-            _contexts_by_token[token] = await _browser.new_context(
-                extra_http_headers={"Authorization": f"Basic {auth}"},
-                viewport={"width": 1280, "height": 2000},
-            )
+    def handle_data(self, data: str) -> None:
+        self._parts.append(data)
 
-    return _contexts_by_token[token]
+    def text(self) -> str:
+        return "".join(self._parts)
 
 
-async def _extract_code_snippet(locator, finding: Finding) -> str | None:
-    # Deliberately broad: this is best-effort text extraction layered on top
-    # of the screenshot, and any failure here (Playwright or otherwise)
-    # should degrade to None rather than fail the activity.
+def _strip_html(marked_up: str) -> str:
+    extractor = _HTMLTextExtractor()
+    extractor.feed(marked_up)
+    return extractor.text()
+
+
+def _host_url_from_deep_link(deep_link: str) -> str:
+    """
+    The finding's own deep_link already encodes exactly which SonarQube
+    host it came from (scanner/sonarqube_common.py builds it as
+    "{base_url}/project/issues?id=..."), for both Local and Cloud
+    configs - reusing it here means render_finding_snippet() needs no
+    separate host_url/scanner_mode plumbing threaded through
+    ScreenshotAttachInput just to find the same information a second way.
+    """
+    parts = urlsplit(deep_link)
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def _fetch_snippet_lines(finding: Finding, token: str, context_lines: int) -> tuple[list[str], int]:
+    """
+    Returns (plain-text source lines, the first line's real file line
+    number) - the caller needs that offset to know where the flagged
+    line falls WITHIN the returned snippet, not just within the file.
+    """
+    line = finding.line or 1
+    from_line = max(1, line - context_lines)
+    to_line = line + context_lines  # SonarQube itself clamps a `to` past EOF - confirmed live, no error.
+
+    request_base_url = resolve_container_host(_host_url_from_deep_link(finding.deep_link))
+    response = requests.get(
+        f"{request_base_url}/api/sources/lines",
+        params={"key": finding.component, "from": from_line, "to": to_line},
+        auth=(token, ""),
+    )
+    response.raise_for_status()
+
+    sources = response.json().get("sources", [])
+    lines = [_strip_html(source.get("code", "")) for source in sources]
+    return lines, from_line
+
+
+def render_finding_snippet(finding: Finding, token: str, context_lines: int = DEFAULT_CONTEXT_LINES) -> bytes:
+    """
+    Fetch the source lines around `finding.line` (±`context_lines`) and
+    render them as a syntax-highlighted PNG, the flagged line
+    highlighted. Raises on any failure (a bad response, no lexer
+    somehow, ...) rather than swallowing it - the caller
+    (temporal/activities/capture_and_attach_screenshot.py) is what
+    decides how to make that visible, not this function.
+    """
+    lines, from_line = _fetch_snippet_lines(finding, token, context_lines)
+    code = "\n".join(lines)
+
+    path = finding.component.split(":", 1)[-1]  # component is "{project_key}:{relative/path}"
     try:
-        return await locator.inner_text()
-    except Exception as e:  # noqa: BLE001
-        activity.logger.warning(f"Failed to extract code snippet text for finding {finding.key}: {e}")
-        return None
+        lexer = lexers.get_lexer_for_filename(path, code)
+    except ClassNotFound:
+        lexer = lexers.TextLexer()
 
+    # The flagged line's position WITHIN the snippet (1-indexed, matching
+    # Pygments' hl_lines convention), not its absolute file line number -
+    # e.g. finding.line=42, from_line=37 (context_lines=5) -> line 6 of
+    # the 11-line snippet, not 42.
+    highlighted_line = (finding.line or from_line) - from_line + 1
 
-async def _extract_annotation_text(page, finding: Finding) -> str | None:
-    """
-    The inline issue-annotation callout is NOT a descendant of the
-    source-viewer element (confirmed live) - it's a separate `<header>`
-    rendered elsewhere in the page, whose first line of text is the issue
-    message. When multiple `<header>`s exist (e.g. the top nav bar is also
-    one), the last one is the issue-detail header.
-    """
-    try:
-        headers = page.locator("header")
-        count = await headers.count()
-        if count == 0:
-            return None
-        text = await headers.nth(count - 1).inner_text()
-        first_line = text.split("\n", 1)[0].strip()
-        return first_line or None
-    except Exception as e:  # noqa: BLE001 - best-effort extraction, see _extract_code_snippet
-        activity.logger.warning(f"Failed to extract annotation text for finding {finding.key}: {e}")
-        return None
-
-
-async def capture_finding_screenshot(finding: Finding, out_path: Path, token: str) -> FindingExtraction:
-    context = await _get_context(token)
-    page = await context.new_page()
-
-    try:
-        # deep_link is human-facing (shown in Jira) - this browser runs
-        # inside the worker container, so it needs the container-reachable
-        # form of the same host, same as scanner/client.py's API requests.
-        target_url = resolve_container_host(finding.deep_link) + f"&open={finding.key}"
-        await page.goto(target_url, wait_until="networkidle", timeout=30000)
-
-        for selector in _SOURCE_VIEWER_SELECTORS:
-            locator = page.locator(selector).first
-            try:
-                await locator.wait_for(state="visible", timeout=5000)
-                await locator.screenshot(path=out_path)
-                code_snippet = await _extract_code_snippet(locator, finding)
-                annotation_text = await _extract_annotation_text(page, finding)
-                return FindingExtraction(
-                    screenshot_path=out_path, code_snippet=code_snippet, annotation_text=annotation_text
-                )
-            except PlaywrightTimeoutError:
-                continue
-
-        activity.logger.warning(
-            f"No known source-viewer selector matched for finding {finding.key}; falling back to full-page screenshot"
-        )
-        await page.screenshot(path=out_path, full_page=True)
-        return FindingExtraction(screenshot_path=out_path, code_snippet=None, annotation_text=None)
-    finally:
-        await page.close()
+    formatter = ImageFormatter(
+        line_numbers=True,
+        line_number_start=from_line,
+        hl_lines=[highlighted_line],
+        font_size=16,
+        line_pad=4,
+    )
+    buffer = io.BytesIO()
+    formatter.format(lexer.get_tokens(code), buffer)
+    return buffer.getvalue()

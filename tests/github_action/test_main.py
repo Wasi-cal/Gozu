@@ -7,9 +7,9 @@ import pytest
 
 from core.models import Finding, Severity
 from github_action.main import main
-from scanner.screenshot import FindingExtraction
 
 MODULE = "github_action.main"
+_FAKE_PNG = b"\x89PNG\r\n\x1a\nfake-png-bytes"
 
 
 @pytest.fixture(autouse=True)
@@ -40,10 +40,6 @@ def make_scanner_client(findings: list[Finding]) -> MagicMock:
     return client
 
 
-async def _no_op_capture(finding, out_path, token) -> FindingExtraction:
-    return FindingExtraction(screenshot_path=out_path, code_snippet=None, annotation_text=None)
-
-
 def test_skips_finding_with_existing_ticket():
     finding = make_finding()
     scanner_client = make_scanner_client([finding])
@@ -52,7 +48,7 @@ def test_skips_finding_with_existing_ticket():
 
     with patch(f"{MODULE}.get_scanner_client", return_value=scanner_client), \
          patch(f"{MODULE}.get_ticket_client", return_value=ticket_client), \
-         patch(f"{MODULE}.capture_finding_screenshot", side_effect=_no_op_capture):
+         patch(f"{MODULE}.render_finding_snippet", return_value=_FAKE_PNG):
         main()
 
     ticket_client.create_ticket.assert_not_called()
@@ -68,11 +64,12 @@ def test_creates_ticket_for_new_finding():
 
     with patch(f"{MODULE}.get_scanner_client", return_value=scanner_client), \
          patch(f"{MODULE}.get_ticket_client", return_value=ticket_client), \
-         patch(f"{MODULE}.capture_finding_screenshot", side_effect=_no_op_capture):
+         patch(f"{MODULE}.render_finding_snippet", return_value=_FAKE_PNG):
         main()
 
     ticket_client.create_ticket.assert_called_once_with(finding)
     ticket_client.attach_screenshot.assert_called_once()
+    ticket_client.add_comment.assert_called_once_with("PROJ-2", finding.message)
 
 
 def test_propagates_real_create_ticket_error():
@@ -84,27 +81,28 @@ def test_propagates_real_create_ticket_error():
 
     with patch(f"{MODULE}.get_scanner_client", return_value=scanner_client), \
          patch(f"{MODULE}.get_ticket_client", return_value=ticket_client), \
-         patch(f"{MODULE}.capture_finding_screenshot", side_effect=_no_op_capture), \
+         patch(f"{MODULE}.render_finding_snippet", return_value=_FAKE_PNG), \
          pytest.raises(RuntimeError, match="jira down"):
         main()
 
 
-def test_screenshot_failure_does_not_fail_run():
+def test_screenshot_failure_does_not_fail_run(caplog):
     finding = make_finding()
     scanner_client = make_scanner_client([finding])
     ticket_client = MagicMock()
     ticket_client.find_existing.return_value = None
     ticket_client.create_ticket.return_value = "PROJ-3"
 
-    async def failing_capture(finding, out_path, token):
-        raise RuntimeError("browser crashed")
-
     with patch(f"{MODULE}.get_scanner_client", return_value=scanner_client), \
          patch(f"{MODULE}.get_ticket_client", return_value=ticket_client), \
-         patch(f"{MODULE}.capture_finding_screenshot", side_effect=failing_capture):
-        main()  # a broken screenshot must not fail the run
+         patch(f"{MODULE}.render_finding_snippet", side_effect=RuntimeError("SonarQube returned 500")):
+        main()  # a broken snippet render must not fail the run
 
     ticket_client.create_ticket.assert_called_once()
+    ticket_client.attach_screenshot.assert_not_called()
+    # Visible, not silent - item 9's requirement applies here too.
+    assert finding.key in caplog.text
+    assert "SonarQube returned 500" in caplog.text
 
 
 def test_exits_nonzero_when_analysis_wait_times_out():

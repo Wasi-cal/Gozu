@@ -28,7 +28,9 @@ from core.models import TicketResult
 __all__ = ["run_scan_cycle", "select_config"]
 
 
-def run_scan_cycle(config: dict, path: str, skip_unchanged: bool = False) -> tuple[str, list[str], TicketResult]:
+def run_scan_cycle(
+    config: dict, path: str, skip_unchanged: bool = False, ticket_cap: int | None = None
+) -> tuple[str, list[str], TicketResult]:
     """
     One full scan -> ticket cycle: ensure prerequisites, run sonar-scanner,
     wait for SonarQube's server-side analysis to actually finish, then
@@ -50,9 +52,20 @@ def run_scan_cycle(config: dict, path: str, skip_unchanged: bool = False) -> tup
     with zero code changes, so that must never be skipped alongside the
     scan. A non-git path, or one with no prior recorded state, always
     scans normally - exactly as if --skip-unchanged were never passed.
+
+    `ticket_cap` (--ticket-cap/-t): a one-off override for THIS invocation
+    only - resolved here (CLI flag wins if given, else the config's own
+    persisted `ticket_cap`, migrations/versions/0008_add_ticket_cap.py)
+    into a single effective value threaded through to
+    create_tickets_activity. Never written back to the config - a
+    genuinely separate knob from `gozu config edit`'s persistent default,
+    even though they share the same fallback-to-BACKLOG_CAP-when-None
+    behavior once resolved.
     """
     ensure_java()
     ensure_sonar_scanner()
+
+    effective_ticket_cap = ticket_cap if ticket_cap is not None else config.get("ticket_cap")
 
     # Captured once, BEFORE sonar-scanner ever runs, and reused below for
     # the post-scan record too - not re-queried afterward. sonar-scanner
@@ -97,7 +110,7 @@ def run_scan_cycle(config: dict, path: str, skip_unchanged: bool = False) -> tup
     wait_for_analysis(scanner_host_url(config), config["credentials"]["sonar_token"], ce_task_id)
     waiting("Analysis finished - triggering ScanToTicketWorkflow ...")
 
-    ticket_result = asyncio.run(trigger_workflow(config, ce_task_id, branch))
+    ticket_result = asyncio.run(trigger_workflow(config, ce_task_id, branch, effective_ticket_cap))
 
     if skip_unchanged and pre_scan_git_state is not None:
         sha, dirty = pre_scan_git_state

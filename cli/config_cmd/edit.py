@@ -5,9 +5,9 @@
 `gozu config edit <name>` - reuses cli/wizard_engine.py, the same
 review/edit engine `gozu init` uses, but skips straight to the review
 screen (walk_first=False) pre-populated from the config's current values,
-and restricted to only the editable fields: project_key, branches,
-sonar_token, sonar_organization/sonar_host_url, webhook_secret, and the
-Jira fields. scanner_type/scanner_mode/sonar_plan/trigger_mode are
+and restricted to only the editable fields: project_key, ticket_cap,
+branches, sonar_token, sonar_organization/sonar_host_url, webhook_secret,
+and the Jira fields. scanner_type/scanner_mode/sonar_plan/trigger_mode are
 structural (decided once, at `gozu init` time) and are never offered as
 edit options here at all - only their VALUES change hands.
 """
@@ -36,10 +36,37 @@ from cli.wizard_engine import WizardField, run_wizard
 # writing any of them).
 _DESTINATION_RESOLVED_KEYS = {"jira_url", "jira_email", "jira_api_token", "jira_project_key"}
 
-# configs.project_key/configs.branches are plain columns (see
-# config_store.update_config_fields()); every other editable field here
-# is a credential (config_store.update_config_credential()).
-_PLAIN_COLUMN_KEYS = {"project_key", "branches"}
+# configs.project_key/configs.branches/configs.ticket_cap are plain
+# columns (see config_store.update_config_fields()); every other
+# editable field here is a credential (config_store.update_config_credential()).
+_PLAIN_COLUMN_KEYS = {"project_key", "branches", "ticket_cap"}
+
+
+def _prompt_ticket_cap(current: int | None) -> int | None:
+    """
+    The PERSISTENT per-config default (`gozu run -t` is a separate,
+    one-off, never-saved override - see cli/main.py) - blank always means
+    "use the built-in fallback (30)", never 0, so leaving it blank reads
+    back as "(not set)" on the review screen exactly like a truly unedited
+    field, not a confusing explicit zero.
+    """
+    default = str(current) if current is not None else ""
+    while True:
+        answer = ask_or_exit(
+            questionary.text("Per-run ticket cap (blank = use the default):", default=default)
+        )
+        answer = answer.strip()
+        if not answer:
+            return None
+        try:
+            value = int(answer)
+        except ValueError:
+            warning("Enter a positive whole number, or leave blank to use the default.")
+            continue
+        if value <= 0:
+            warning("Enter a positive whole number, or leave blank to use the default.")
+            continue
+        return value
 
 
 def _build_edit_fields(config: dict, state: dict) -> list[WizardField]:
@@ -48,8 +75,14 @@ def _build_edit_fields(config: dict, state: dict) -> list[WizardField]:
     trigger_mode = config["trigger_mode"]
 
     state["project_key"] = config.get("project_key") or ""
+    state["ticket_cap"] = config.get("ticket_cap")
     fields = [
         WizardField("project_key", "SonarQube project key", lambda: prompt_project_key(state.get("project_key", ""))),
+        WizardField(
+            "ticket_cap",
+            "Per-run ticket cap (blank = default)",
+            lambda: _prompt_ticket_cap(state.get("ticket_cap")),
+        ),
     ]
 
     if scanner_mode == "local":

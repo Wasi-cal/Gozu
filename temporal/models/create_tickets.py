@@ -12,3 +12,9 @@ class CreateTicketsInput(BaseModel):
     findings: list[Finding]
     ticket_backend: str = "jira"
     credentials: dict[str, str] = {}
+    # None -> create_tickets_activity falls back to its own BACKLOG_CAP
+    # constant. Already the fully-resolved effective value by the time
+    # this model is built (SonarToJiraInput.ticket_cap, itself resolved
+    # once by the CLI from --ticket-cap vs the config's stored default) -
+    # not re-resolved here.
+    ticket_cap: int | None = None

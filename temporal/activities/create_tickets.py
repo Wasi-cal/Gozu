@@ -19,6 +19,12 @@ from ticket.jira_client import CUSTOM_FIELD_COMPONENT_NAME, CUSTOM_FIELD_LINE_NA
 # tickets in one activity. Anything past this goes into one rollup ticket
 # instead (see JiraClient.upsert_rollup_ticket()) and is deliberately left
 # unclaimed, so a future run picks it back up as real cap headroom frees up.
+#
+# The FALLBACK default, not the only option anymore - input.ticket_cap
+# (configs.ticket_cap, migrations/versions/0008_add_ticket_cap.py, or a
+# --ticket-cap one-off override - see cli/scan_runner/__init__.py, which
+# resolves the two before this activity ever sees the result) overrides
+# this per-run when set; this constant only governs when neither was.
 BACKLOG_CAP = 30
 
 
@@ -44,9 +50,22 @@ async def create_tickets_activity(input: CreateTicketsInput) -> TicketResult:
     # backend without discover_custom_fields() (or if this Jira instance
     # has neither optional field configured) -> empty dict, which
     # create_ticket() already treats as "keep Component/Line in
-    # Description", identical to today's behavior.
+    # Description", identical to today's behavior. Same bonus/best-effort
+    # treatment as sprint assignment and the rollup-ticket upsert below -
+    # confirmed live that an unreachable/misconfigured Jira instance makes
+    # this a real RuntimeError, which (unwrapped) failed this entire
+    # activity before a single finding was even looked at, regardless of
+    # ticket_cap - a field-discovery outage must never be able to block
+    # ticket creation itself.
+    custom_fields = {}
     discover_custom_fields = getattr(client, "discover_custom_fields", None)
-    custom_fields = discover_custom_fields([CUSTOM_FIELD_COMPONENT_NAME, CUSTOM_FIELD_LINE_NAME]) if discover_custom_fields else {}
+    if discover_custom_fields:
+        try:
+            custom_fields = discover_custom_fields([CUSTOM_FIELD_COMPONENT_NAME, CUSTOM_FIELD_LINE_NAME])
+        except Exception as e:
+            activity.logger.warning(f"Custom field discovery failed, falling back to Description for all fields: {e}")
+
+    ticket_cap = input.ticket_cap if input.ticket_cap is not None else BACKLOG_CAP
 
     created = []
     skipped = []
@@ -78,7 +97,7 @@ async def create_tickets_activity(input: CreateTicketsInput) -> TicketResult:
                 )
                 claims.clear_stale(conn, destination, finding.key)
 
-            if processed_new_count >= BACKLOG_CAP:
+            if processed_new_count >= ticket_cap:
                 # Not claimed - this finding is genuinely untouched, so a
                 # future run (once earlier findings free up cap headroom,
                 # or just because this run's cap resets) reconsiders it
