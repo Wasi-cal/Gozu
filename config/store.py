@@ -5,16 +5,17 @@
 # Depends on: PostgreSQL - data storage
 
 """
-CRUD for the `configs` + `config_credentials` tables (sql/init.sql) - named
-sets of scanner/ticket credentials, normalized so a new scanner/ticket
-backend never needs a schema change (see sql/init.sql for why).
+CRUD for the `configs` + `config_credentials` tables
+(migrations/versions/0001_initial_schema.py) - named sets of scanner/ticket
+credentials, normalized so a new scanner/ticket backend never needs a
+schema change (see that migration for why).
 
 Every credential value (sonar_token, jira_api_token, webhook_secret, or
 whatever a future backend needs) is encrypted via config.crypto before ever
 reaching Postgres, and decrypted only by get_config() - list_configs()
 never touches them, since it's for a picker list, not for use.
 
-Called "configs", not "profiles" - see sql/init.sql for why.
+Called "configs", not "profiles" - see migrations/versions/0001_initial_schema.py for why.
 """
 
 from config.connection import get_connection

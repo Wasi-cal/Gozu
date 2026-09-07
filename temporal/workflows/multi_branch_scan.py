@@ -7,7 +7,11 @@
 """
 Workflow for a multi-branch config's manual/direct scan (`gozu run`):
 fans out into one ScanToTicketWorkflow child per branch, concurrently,
-aggregating their created/skipped results into one summary.
+aggregating their created/skipped/deferred/closed results into one
+combined TicketResult - cli/report.py's end-of-run summary always
+renders exactly one report regardless of branch count, never one per
+branch, because this is the only TicketResult it ever sees for a
+multi-branch config.
 
 Not used for webhook-triggered configs - SonarQube already delivers one
 webhook per branch there, so there's nothing to fan out (see
@@ -64,8 +68,16 @@ class MultiBranchScanWorkflow:
 
         created: list[CreatedTicket] = [entry for result in results for entry in result.created]
         skipped: list[str] = [key for result in results for key in result.skipped]
+        deferred: list[str] = [key for result in results for key in result.deferred]
+        closed: list[str] = [key for result in results for key in result.closed]
+        # Every child shares the same ticket destination in the common
+        # case, so upsert_rollup_ticket() (create_tickets_activity) upserts
+        # the exact same shared ticket per child rather than a distinct one
+        # each - the first non-None one found is that shared key, not an
+        # arbitrary pick among genuinely different tickets.
+        rollup_ticket = next((result.rollup_ticket for result in results if result.rollup_ticket), None)
         workflow.logger.info(
-            f"Multi-branch fan-out complete: {len(created)} ticket(s) created, {len(skipped)} skipped "
-            f"across {len(branches)} branch(es)"
+            f"Multi-branch fan-out complete: {len(created)} ticket(s) created, {len(skipped)} skipped, "
+            f"{len(deferred)} deferred, {len(closed)} auto-closed across {len(branches)} branch(es)"
         )
-        return TicketResult(created=created, skipped=skipped)
+        return TicketResult(created=created, skipped=skipped, deferred=deferred, rollup_ticket=rollup_ticket, closed=closed)

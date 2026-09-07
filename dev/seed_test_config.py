@@ -5,7 +5,13 @@
 
 """
 Throwaway verification script - NOT part of the product (the real way to
-create a config is `gozu init`, cli/init_wizard.py).
+create a config is `gozu init`, cli/init_wizard.py). Lives under dev/, not
+scripts/, specifically because pyproject.toml's wheel `include` packages
+scripts/** wholesale (bootstrap_env.py/env_ports.py/fernet_safety.py/
+paths.py are all genuinely runtime-needed there) - dev/ sits outside every
+include pattern entirely, so a client's installed wheel never has a
+generic exclude list to remember to extend every time another throwaway
+script like this one gets added.
 
 Inserts one dummy config via config_store.create_config(), reads it back via
 config_store.get_config(), and confirms every decrypted credential

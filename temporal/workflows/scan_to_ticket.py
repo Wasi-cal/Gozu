@@ -106,6 +106,7 @@ class ScanToTicketWorkflow:
         # of the create pipeline above, which already succeeded by this
         # point, same "don't let a bonus feature undo real work" rule as
         # jira_client.py's sprint assignment and rollup-ticket upsert.
+        closed_tickets: list[str] = []
         try:
             closed_tickets = await workflow.execute_activity(
                 reconcile_resolved_findings_activity,
@@ -116,13 +117,35 @@ class ScanToTicketWorkflow:
                     credentials=input.credentials,
                 ),
                 start_to_close_timeout=timedelta(seconds=60),
-                retry_policy=RetryPolicy(maximum_attempts=3),
+                # ScannerAuthError (invalid/expired scanner token, from
+                # fetch_resolutions -> the same scanner-search codepath
+                # fetch_findings_activity uses) and TicketAuthError
+                # (invalid/expired ticket-backend token) never get fixed by
+                # retrying - everything else this activity can raise past
+                # its own per-claim try/excepts (transient existence-check
+                # or auto-close failures) already stays contained inside
+                # the activity itself and never reaches this policy at
+                # all. maximum_attempts=3 matches create_tickets_activity:
+                # this is a bonus step wrapped in the try/except right
+                # below, so it's never worth retrying as hard as
+                # fetch_findings_activity's real pipeline step.
+                retry_policy=RetryPolicy(
+                    maximum_attempts=3,
+                    non_retryable_error_types=["ScannerAuthError", "TicketAuthError"],
+                ),
             )
             workflow.logger.info(f"Reconciled resolved findings: auto-closed {len(closed_tickets)} ticket(s)")
             for ticket_key in closed_tickets:
                 workflow.logger.info(f"  auto-closed {ticket_key}")
         except Exception as e:
             workflow.logger.warning(f"Reconciling resolved findings failed, leaving existing tickets untouched: {e}")
+
+        # Attached after create_tickets_activity already returned, not
+        # requested from it directly - reconciliation is a separate
+        # activity that runs afterward, but the CLI's end-of-run report
+        # (cli/report.py) wants one combined TicketResult, not two return
+        # values threaded separately through MultiBranchScanWorkflow too.
+        ticket_result = ticket_result.model_copy(update={"closed": closed_tickets})
 
         if ticket_result.created:
             findings_by_key = {finding.key: finding for finding in findings}
@@ -138,7 +161,25 @@ class ScanToTicketWorkflow:
                             credentials=input.credentials,
                         ),
                         start_to_close_timeout=timedelta(seconds=45),
-                        retry_policy=RetryPolicy(maximum_attempts=2),
+                        # TicketAuthError/TicketValidationError from the
+                        # attach_screenshot()/add_comment() calls this
+                        # activity makes are permanent, same reasoning as
+                        # create_tickets_activity - never fixed by
+                        # retrying. Everything else that can propagate
+                        # here (Playwright navigation/timeout failures -
+                        # scanner/screenshot.py's page.goto()/page.screenshot()
+                        # calls; the best-effort text extraction helpers
+                        # already degrade to None rather than raising) is
+                        # transient network/timing, so it stays on the
+                        # normal retryable path. maximum_attempts stays at
+                        # 2, unchanged - this is a best-effort bonus
+                        # feature (asyncio.gather(return_exceptions=True)
+                        # below), never worth retrying as hard as a real
+                        # pipeline step.
+                        retry_policy=RetryPolicy(
+                            maximum_attempts=2,
+                            non_retryable_error_types=["TicketAuthError", "TicketValidationError"],
+                        ),
                     )
                     for entry in ticket_result.created
                 ],

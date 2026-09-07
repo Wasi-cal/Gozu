@@ -6,14 +6,17 @@
 """Starting the Temporal workflow once SonarQube's analysis has finished."""
 
 import os
+import uuid
 
 from temporalio.client import Client
 
 from cli.scan_runner.config_fields import config_branches
 from core.models import TicketResult
 from temporal.data_converter import DATA_CONVERTER, TASK_QUEUE
+from temporal.models.reconcile_resolved_findings import ReconcileResolvedFindingsInput
 from temporal.models.sonar_to_jira import SonarToJiraInput
 from temporal.workflows.multi_branch_scan import MultiBranchScanWorkflow
+from temporal.workflows.reconcile_only import ReconcileOnlyWorkflow
 from temporal.workflows.scan_to_ticket import ScanToTicketWorkflow
 
 
@@ -60,3 +63,32 @@ async def trigger_workflow(config: dict, ce_task_id: str, branch: str | None) ->
         )
 
     return await client.execute_workflow(ScanToTicketWorkflow.run, workflow_input, id=workflow_id, task_queue=TASK_QUEUE)
+
+
+async def trigger_reconcile_only(config: dict) -> list[str]:
+    """
+    Runs ONLY reconciliation (ReconcileOnlyWorkflow) - used by
+    `gozu run --skip-unchanged` when the scan/fetch/create-tickets
+    sequence itself is being skipped this cycle: a human could still have
+    resolved a finding directly in SonarQube's own UI with zero code
+    changes, so auto-close must never be skipped alongside the scan.
+
+    No ceTaskId exists for this cycle (nothing was scanned), so
+    workflow_id can't reuse trigger_workflow()'s per-analysis idempotency
+    key - a random one is fine here, since each skipped cycle's
+    reconciliation is its own independent action, not something that
+    needs replay-safety tied to a specific SonarQube analysis.
+    """
+    temporal_port = os.environ.get("TEMPORAL_PORT", "7233")
+    client = await Client.connect(f"localhost:{temporal_port}", data_converter=DATA_CONVERTER)
+
+    reconcile_input = ReconcileResolvedFindingsInput(
+        scanner_type=config["scanner_type"],
+        scanner_mode=config["scanner_mode"],
+        ticket_backend=config["ticket_backend"],
+        credentials=config["credentials"],
+    )
+    workflow_id = f"sonar-jira-reconcile-{uuid.uuid4().hex}"
+    return await client.execute_workflow(
+        ReconcileOnlyWorkflow.run, reconcile_input, id=workflow_id, task_queue=TASK_QUEUE
+    )

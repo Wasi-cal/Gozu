@@ -65,13 +65,20 @@ def bootstrap_env(force_new_key: bool = False, port_overrides: dict[str, int] | 
     new_fields: dict[str, str] = {}
 
     if "POSTGRES_USER" not in existing:
-        new_fields["POSTGRES_USER"] = "sonarjira"
+        new_fields["POSTGRES_USER"] = "gozu"
     if "POSTGRES_PASSWORD" not in existing:
         new_fields["POSTGRES_PASSWORD"] = secrets.token_urlsafe(32)
     if "POSTGRES_DB" not in existing:
-        new_fields["POSTGRES_DB"] = "sonarjira"
+        new_fields["POSTGRES_DB"] = "gozu"
     if "POSTGRES_HOST" not in existing:
         new_fields["POSTGRES_HOST"] = "localhost"
+    # A separate role/database for local-mode SonarQube's own Postgres
+    # backend (sql/init_sonarqube_db.sql), in the same Postgres instance
+    # as gozu's own database - genuinely isolated (a different database,
+    # not a schema), so `gozu down --wipe`'s reset of gozu's own database
+    # (cli/stack/wipe.py) can never touch it.
+    if "SONARQUBE_DB_PASSWORD" not in existing:
+        new_fields["SONARQUBE_DB_PASSWORD"] = secrets.token_urlsafe(32)
 
     for port_name in DEFAULT_PORTS:
         if port_name not in existing:
@@ -129,7 +136,7 @@ def main() -> int:
 
     print(f"Updated {ENV_PATH}. New fields:")
     for key, value in new_fields.items():
-        if key in ("POSTGRES_PASSWORD", "FERNET_KEY"):
+        if key in ("POSTGRES_PASSWORD", "SONARQUBE_DB_PASSWORD", "FERNET_KEY"):
             print(f"  {key}: generated (not shown)")
         else:
             print(f"  {key}={value}")

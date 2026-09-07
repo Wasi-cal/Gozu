@@ -16,7 +16,9 @@ import config.store as config_store
 from cli.config_cmd.edit import edit_command
 from cli.config_lookup import resolve_config_or_prompt
 from cli.prompts import ask_or_exit
-from cli.status import success
+from cli.stack.backup import create_backup, next_backup_path
+from cli.status import success, waiting
+from scripts.paths import STACK_DIR
 
 __all__ = ["delete_command", "edit_command", "list_command"]
 
@@ -42,6 +44,14 @@ def delete_command(name: str) -> None:
     ticket_destination it references, even if this was the last config
     using it. A single y/N confirmation, not --wipe's typed-word ritual -
     this is scoped to one config, not the whole store.
+
+    Still takes the same full-database backup --wipe does beforehand
+    (cli/stack/backup.py's create_backup()/next_backup_path(), reused
+    as-is - same 7-day retention, same file, no separate backup logic to
+    maintain) - a single config's blast radius doesn't warrant --wipe's
+    typed-word ritual, but losing one with nothing to restore from is the
+    exact incident --wipe's own backup step was added to prevent in the
+    first place, and that risk applies here too.
     """
     config = resolve_config_or_prompt(name)
     # Use the resolved config's own name from here on, not the (possibly
@@ -64,6 +74,11 @@ def delete_command(name: str) -> None:
     if not ask_or_exit(questionary.confirm(f"Delete '{name}'?", default=False)):
         typer.echo("Cancelled - nothing was deleted.")
         return
+
+    backup_path = next_backup_path()
+    waiting("Backing up gozu's database before deleting ...")
+    create_backup(backup_path, STACK_DIR)
+    success(f"Backup written: {backup_path}")
 
     config_store.delete_config(name)
     success(f"Deleted config '{name}'.")

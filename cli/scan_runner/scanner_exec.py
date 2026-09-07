@@ -116,3 +116,30 @@ def detect_git_branch(path: str) -> str | None:
     if result.returncode != 0:
         return None
     return result.stdout.strip() or None
+
+
+def git_state(path: str) -> tuple[str, bool] | None:
+    """
+    Current HEAD SHA + whether the working tree is dirty, for
+    `gozu run --skip-unchanged`'s "nothing's changed since the last
+    successful scan" check - None if `path` isn't a git repo (or git
+    isn't available), same "just say no signal" contract as
+    detect_git_branch() above, so a --skip-unchanged config pointed at a
+    non-git directory always scans, exactly as if the flag were never
+    passed.
+    """
+    sha_result = subprocess.run(["git", "-C", path, "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
+    if sha_result.returncode != 0:
+        return None
+    sha = sha_result.stdout.strip()
+    if not sha:
+        return None
+
+    status_result = subprocess.run(
+        ["git", "-C", path, "status", "--porcelain"], capture_output=True, text=True, check=False
+    )
+    if status_result.returncode != 0:
+        return None
+    dirty = bool(status_result.stdout.strip())
+
+    return sha, dirty

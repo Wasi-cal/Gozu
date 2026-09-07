@@ -19,6 +19,18 @@ Everything runs locally via Docker Compose - Postgres (config storage),
 Temporal, and optionally a local SonarQube. Jira is the only piece that has
 to be real (Cloud or self-hosted).
 
+Local-mode SonarQube runs against a real Postgres database (its own
+`sonarqube` database and role, in the same Postgres instance/container
+gozu's own database already runs in - not a second container) rather than
+its bundled embedded H2 database, which isn't recommended beyond quick
+trials. `gozu init`/`bootstrap_env.py` generates a random
+`SONARQUBE_DB_PASSWORD` alongside gozu's own Postgres credentials;
+`sql/init_sonarqube_db.sql` creates the database/role once, the first time
+the `postgres_data` volume is initialized, and `docker-compose.yml`'s
+`sonarqube` service points at it via `SONAR_JDBC_URL`/`SONAR_JDBC_USERNAME`/
+`SONAR_JDBC_PASSWORD`. It's a genuinely separate database, not a schema in
+gozu's own - see "`gozu down --wipe`" below for why that separation matters.
+
 ## Quickstart
 
 ```bash
@@ -61,6 +73,62 @@ starts one child workflow per branch under a parent
 child workflows. A webhook delivery only ever concerns one branch, so it
 never needs to fan out - the branch list just gates which deliveries proceed.
 
+## What's in a ticket
+
+**Automatic, zero setup required** - every ticket gozu creates already has:
+
+- **Labels**, visible natively in Jira's Details panel:
+  - `source-sonarqube` - identifies the scanner (fixed, not per-finding)
+  - `security`
+  - `type-{vulnerability|hotspot}` - the finding's kind, lowercased
+  - `branch-{branch}` - only added when the finding actually has a branch
+    value (e.g. a multi-branch Premium config); omitted entirely for a
+    scanner/config with no branch concept, rather than a meaningless
+    `branch-none`
+  - `source-key-{finding key}` - gozu's own dedupe marker, not meant to
+    be human-facing
+- **Priority**, mapped from the finding's severity (`ticket/base.py`'s
+  `SEVERITY_TO_PRIORITY`: Critical/High → Highest/High, Medium → Medium,
+  Low/Info → Low) - shows in the Details panel like any other Jira
+  ticket's priority, no setup needed.
+- **A native remote link** to the finding's SonarQube deep link
+  (`POST /issue/{key}/remotelink`) - shows in Jira's "Web Links" section,
+  clickable, not a URL pasted into the description text.
+- **Description**: the finding's message, plus Component/Line/Type/
+  Severity/Source/Branch as plain text - unless the optional custom
+  fields below are set up, in which case Component/Line move out of here
+  and into their own fields instead.
+
+**Optional - only if a Jira admin sets it up (gozu never creates fields itself):**
+
+Two custom fields, if present in your Jira instance, get real structured
+values instead of plain Description text. A Jira admin creates them
+**manually** (Jira Settings → Issues → Custom fields) with these **exact**
+names and types - gozu discovers them by name, so a typo means gozu
+won't find them and everything just stays in Description, same as if you
+hadn't set anything up at all:
+
+| Field name | Jira field type |
+|---|---|
+| `SonarQube Component` | Short text |
+| `SonarQube Line` | Number |
+
+Discovery happens once per scan run (`GET /rest/api/3/field`, not once
+per ticket), and it's **per-field, not all-or-nothing** - if only one of
+the two is configured, only that one moves out of Description; the other
+stays there. With neither field created, behavior is completely
+unchanged from before this existed: both stay in Description as plain
+text.
+
+A field can exist in your Jira instance globally but not actually be on
+this specific project's create screen - the discovery query alone can't
+detect that. If Jira rejects ticket creation specifically because of one
+of these fields, gozu retries the same creation with that field removed
+and its content folded back into Description, logging clearly when this
+happens so a misconfigured field is visible rather than silently
+swallowed. A creation failure for any other reason (a bad project key,
+etc.) is unaffected by this and fails exactly as it always has.
+
 ## Auto-closing resolved findings
 
 On by default for every config, no setting to turn it off - every scan
@@ -81,6 +149,34 @@ explaining why (e.g. "Closed automatically - SonarQube marked this False
 Positive"). If a ticket's current workflow has no transition into a
 "done" status available at all, gozu logs that and leaves it alone rather
 than guessing at the wrong transition.
+
+## Skipping unchanged scans (`--skip-unchanged`)
+
+Off by default - `gozu run` scans exactly as it always has unless you
+explicitly pass `--skip-unchanged`/`-s`. When you do, and the scan path
+(`--path`) is a real git repository: before running sonar-scanner, gozu
+checks the current HEAD commit and `git status --porcelain` (clean vs
+dirty) against what was recorded for this config the last time it scanned
+successfully. If the working tree is clean now, was clean then, and it's
+the exact same commit, the scan/fetch/create-tickets sequence is skipped
+entirely for that cycle - printed clearly, not silently, so it's obvious
+in the output when this happens. That recorded state lives in Postgres
+(`configs.last_scan_sha`/`last_scan_dirty`), not just in memory, so it
+persists across separate `gozu run` invocations, not only within one
+`--watch` loop.
+
+**Auto-close reconciliation always still runs, even on a skipped cycle** -
+a human can resolve a finding directly in SonarQube's own UI with zero
+code changes, so a skipped scan must never also skip checking whether
+something got auto-closed.
+
+This only ever helps a **committed-and-clean** checkout. A config
+scanning a path that isn't a git repository at all, or one whose caller
+never commits (CI running against an ephemeral/dirty checkout, a
+directory with permanent uncommitted changes, etc), gets no benefit from
+this flag - it just scans every cycle, exactly as if `--skip-unchanged`
+were never passed. That's expected, not a bug: there's no reliable
+"nothing changed" signal to check against in that case.
 
 ## Backlog cap
 
@@ -144,7 +240,9 @@ receiver/               Flask webhook receiver
 
 core/models.py          shared domain models (Finding, TicketResult, ...)
 scripts/                 one-off/bootstrap scripts (env setup, seeding)
-sql/init.sql             Postgres schema
+config/migrations.py     Alembic migration runner (config/migrations.py)
+alembic.ini, migrations/ Alembic config + revisions (see ARCHITECTURE.md)
+sql/init_sonarqube_db.sql  local-mode SonarQube's own database/role, unrelated to the above
 ```
 
 ## Adding a new scanner or ticket backend
@@ -167,7 +265,9 @@ the receiver only ever talk to the abstract interface.
 
 A **config** (never called a "profile" - Docker Compose already has an
 unrelated `profiles` concept) is a named set of scanner + ticket
-credentials, stored in Postgres (`sql/init.sql`) via `config/store.py`.
+credentials, stored in Postgres (schema created/evolved by
+`config/migrations.py` - see ARCHITECTURE.md's "Database schema &
+migrations") via `config/store.py`.
 Every secret value is Fernet-encrypted (`config/crypto.py`) before it
 touches the database; `FERNET_KEY` lives only in `.env`, never committed.
 
@@ -275,20 +375,29 @@ started - not just the always-on services.
 
 `gozu down` alone only stops containers - volumes/data persist, and
 nothing is destroyed. `gozu down --wipe` is the one irreversible command
-in this CLI: it also deletes Postgres's volume (every config, ticket
-destination, and dedupe claim) and, if `sonarqube-local` was an active
-profile this run, local SonarQube's volume (scan history) too. Before
-doing anything destructive it prints exactly what it's about to delete -
-real row counts, not an estimate - along with the path a Postgres backup
-will be written to, and requires typing the literal word `wipe` to
-proceed; anything else cancels with zero side effects (the stack still
-ends up stopped from the non-destructive part, just not wiped, and no
-backup is created for a cancelled wipe).
+in this CLI: it resets gozu's own database - every config, ticket
+destination, and dedupe claim - back to empty. It no longer touches
+Postgres's container/volume, or local SonarQube's database/volumes, at
+all: local-mode SonarQube now runs on its own separate `sonarqube`
+database in the same Postgres instance (see the Quickstart section
+above), and `--wipe` only ever resets the one database it actually owns
+(`DROP DATABASE`/`CREATE DATABASE` against gozu's own database, then
+every Alembic revision re-applied via `config/migrations.py`'s
+`run_migrations()` - the same call `gozu up` makes on a fresh install,
+not a separate mechanism) - SonarQube's database is completely untouched
+by this, not merely deprioritized. Before doing
+anything destructive it prints exactly what it's about to reset - real
+row counts, not an estimate - along with the path a Postgres backup will
+be written to, and requires typing the literal word `wipe` to proceed;
+anything else cancels with zero side effects (the stack still ends up
+stopped from the non-destructive part, just not reset, and no backup is
+created for a cancelled wipe).
 
-Once confirmed, a `pg_dump` of Postgres (configs, ticket destinations,
-dedupe claims - not SonarQube's volume, that's deliberately out of scope)
-is written to `~/.gozu/backups/wipe-<timestamp>.sql` before anything is
-actually deleted - the printed path is real, not aspirational. Backups
-older than 7 days are pruned the next time a wipe runs
+Once confirmed, a `pg_dump` of gozu's own database (configs, ticket
+destinations, dedupe claims - SonarQube's database is a different
+database entirely, so it's never part of this dump) is written to
+`~/.gozu/backups/wipe-<timestamp>.sql` before anything is actually reset -
+the printed path is real, not aspirational. Backups older than 7 days are
+pruned the next time a wipe runs
 (`cli/stack/backup.py`'s `_RETENTION_DAYS`) - there's no separate
 scheduled cleanup job.

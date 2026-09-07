@@ -21,10 +21,12 @@ dependencies = [
     "psycopg[binary]",
     "typer",
     "questionary",
+    "rich",
+    "alembic>=1.19.2",
 ]
 
 [project.scripts]
-gozu = "cli.main:app"
+gozu = "cli.main:main"
 gozu-github-action = "github_action.main:main"
 
 [dependency-groups]
@@ -38,6 +40,15 @@ dev = ["pytest", "pytest-asyncio"]
 default-groups = ["dev"]
 
 [tool.hatch.build.targets.wheel]
+# An allowlist, not an exclude list - anything not matching one of these
+# patterns (tests/, CLAUDE.md, dev/, ARCHITECTURE.md, ...) is structurally
+# never in the wheel, with nothing to remember to keep excluded as the repo
+# grows. scripts/** is included wholesale because every file actually left
+# in scripts/ (bootstrap_env.py/env_ports.py/fernet_safety.py/paths.py) is
+# genuinely runtime-needed - a throwaway/dev-only script (e.g. what used to
+# be scripts/seed_test_config.py) belongs under dev/ instead, specifically
+# because dev/ matches none of these patterns; don't add one back into
+# scripts/ just because it's Python and lives near real code.
 include = [
     "core/**",
     "scanner/**",

@@ -20,11 +20,30 @@ import logging
 from flask import Flask, jsonify, request
 
 import config.store as config_store
+from core.constants import CONTACT_EMAILS
 from receiver.starter import start_scan_to_ticket_workflow
 from receiver.verify_signature import verify_signature
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class _ContactEmailsLogFilter(logging.Filter):
+    """
+    Appends CONTACT_EMAILS, as plain text, to every ERROR-level+ record -
+    same spirit as temporal/worker.py's equivalent. No terminal is
+    attached here for a clickable mailto: link to make sense of - an ops
+    person reading these logs after the fact is the audience instead.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno >= logging.ERROR:
+            record.msg = f"{record.msg} (contact: {', '.join(CONTACT_EMAILS)})"
+        return True
+
+
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(_ContactEmailsLogFilter())
 
 
 class _HealthCheckLogFilter(logging.Filter):

@@ -34,6 +34,19 @@ ROLLUP_LABEL = "gozu-backlog-rollup"
 # unreadable ticket body otherwise.
 _ROLLUP_DESCRIPTION_MAX_LINES = 50
 
+# Exact names a Jira admin must give these two OPTIONAL custom fields
+# (Short text / Number respectively - see README.md's Jira setup section)
+# for discover_custom_fields() to find them. Neither existing is the
+# default, unchanged-from-today state: Component/Line stay embedded in
+# Description text instead.
+CUSTOM_FIELD_COMPONENT_NAME = "SonarQube Component"
+CUSTOM_FIELD_LINE_NAME = "SonarQube Line"
+
+
+def _normalize_label_value(value: str) -> str:
+    """Jira labels can't contain spaces - lowercased, spaces hyphenated, everything else (e.g. a branch's "/") left as-is since Jira accepts it."""
+    return value.strip().lower().replace(" ", "-")
+
 
 class JiraClient(TicketClient):
     def __init__(self, base_url: str, email: str, api_token: str, project_key: str):
@@ -109,40 +122,178 @@ class JiraClient(TicketClient):
             summary = summary[: SUMMARY_MAX_LENGTH - 3] + "..."
         return summary
 
-    def _build_description(self, finding: Finding) -> dict:
-        details = [
-            f"Component: {finding.component}",
-            f"Line: {finding.line}",
+    def _build_labels(self, finding: Finding) -> list[str]:
+        """
+        "source-sonarqube"/"type-{type}" identify the scanner/finding kind
+        the same way "security" already did, just structured (Source/Type/
+        Branch) instead of ad hoc - all show natively in Jira's Details
+        panel with zero project setup, unlike the custom fields below.
+        "branch-{branch}" is only added when a real branch value exists -
+        a config/scanner with no branch concept (e.g. SonarQube Cloud
+        Free, always "main" and never tagged - see
+        cli/scan_runner/scanner_exec.py's _build_scanner_command()) gets
+        no branch label at all rather than a meaningless "branch-none".
+        """
+        labels = [
+            "source-sonarqube",
+            "security",
+            f"type-{_normalize_label_value(finding.finding_type)}",
+            f"source-key-{finding.key}",
+        ]
+        if finding.branch:
+            labels.append(f"branch-{_normalize_label_value(finding.branch)}")
+        return labels
+
+    def _build_description(self, finding: Finding, component_moved: bool = False, line_moved: bool = False) -> dict:
+        """
+        `component_moved`/`line_moved` are True when that value is being
+        set as a real custom field instead (see create_ticket()) - the
+        corresponding line is dropped here so it isn't shown twice.
+        deep_link is never included here at all anymore - it's a native
+        remote link now (create_ticket()'s _create_remote_link() call),
+        not embedded text.
+        """
+        details = []
+        if not component_moved:
+            details.append(f"Component: {finding.component}")
+        if not line_moved:
+            details.append(f"Line: {finding.line}")
+        details += [
             f"Type: {finding.finding_type}",
             f"Severity: {finding.severity.value}",
             f"Source: {finding.source_tool}",
             f"Branch: {finding.branch or 'unknown'}",
         ]
-        return doc(
-            paragraph(finding.message),
-            bullet_list(details),
-            {"type": "bulletList", "content": [{"type": "listItem", "content": [paragraph(finding.deep_link, link=finding.deep_link)]}]},
-        )
+        return doc(paragraph(finding.message), bullet_list(details))
 
-    def create_ticket(self, finding: Finding) -> str:
-        """Create a Jira issue for a finding, return the new issue key."""
-        payload: dict[str, Any] = {
-            "fields": {
-                "project": {"key": self.project_key},
-                "summary": self._build_summary(finding),
-                "issuetype": {"name": "Bug"},
-                "priority": {"name": self._map_priority(finding.severity)},
-                "labels": ["sonarqube", "security", f"source-key-{finding.key}"],
-                "description": self._build_description(finding),
-            }
+    def discover_custom_fields(self, names: list[str]) -> dict[str, str]:
+        """
+        Queries Jira's full field list ONCE (see create_tickets_activity,
+        which calls this a single time per activity execution, not once
+        per ticket - the same Jira instance backs every ticket in a run)
+        and returns whichever of `names` (exact match against Jira's
+        field "name") actually exist in this instance, as
+        name -> "customfield_XXXXX". A name with no match simply isn't a
+        key in the returned dict - this is a lookup, not a requirement;
+        create_ticket() treats a missing name as "keep that content in
+        Description", exactly like today.
+
+        Existing globally is NOT the same as being usable - a field can
+        exist in this Jira instance but not be on this project's
+        create/edit screen, which this list-all-fields query has no way
+        to detect. See create_ticket()'s write-time fallback for the case
+        this can't catch.
+        """
+        response = requests.get(f"{self.base_url}/rest/api/3/field", auth=self.auth, headers=self.headers)
+        self._raise_for_status(response, "list fields")
+        wanted = set(names)
+        return {field["name"]: field["id"] for field in response.json() if field.get("name") in wanted}
+
+    def _build_create_payload(
+        self, finding: Finding, component_field_id: str | None, line_field_id: str | None
+    ) -> dict[str, Any]:
+        line_value = finding.line if (line_field_id and finding.line is not None) else None
+        fields: dict[str, Any] = {
+            "project": {"key": self.project_key},
+            "summary": self._build_summary(finding),
+            "issuetype": {"name": "Bug"},
+            "priority": {"name": self._map_priority(finding.severity)},
+            "labels": self._build_labels(finding),
+            "description": self._build_description(
+                finding, component_moved=bool(component_field_id), line_moved=line_value is not None
+            ),
         }
+        if component_field_id:
+            fields[component_field_id] = finding.component
+        if line_value is not None:
+            fields[line_field_id] = line_value
+        return {"fields": fields}
 
+    def _rejected_custom_field_ids(self, response: requests.Response, candidate_ids: set[str]) -> set[str]:
+        """
+        Parses a 400 create-issue response for Jira's per-field "errors"
+        object, returning whichever of `candidate_ids` (the customfield_
+        XXXXX ids create_ticket() actually tried to set) Jira rejected -
+        empty if the response has no per-field errors at all, OR if it
+        names anything NOT in `candidate_ids` (a genuinely unrelated
+        validation failure - a bad project key, an invalid issue type -
+        which must keep raising TicketValidationError exactly as before,
+        never be silently retried away just because a custom field was
+        also involved).
+        """
+        try:
+            body = response.json()
+        except ValueError:
+            return set()
+        error_keys = set((body.get("errors") or {}).keys())
+        if not error_keys or not error_keys <= candidate_ids:
+            return set()
+        return error_keys
+
+    def _create_remote_link(self, issue_key: str, url: str) -> None:
+        payload: dict[str, Any] = {"object": {"url": url, "title": "SonarQube finding"}}
+        response = requests.post(
+            f"{self.base_url}/rest/api/3/issue/{issue_key}/remotelink",
+            json=payload,
+            auth=self.auth,
+            headers=self.headers,
+        )
+        self._raise_for_status(response, "create remote link")
+
+    def create_ticket(self, finding: Finding, custom_fields: dict[str, str] | None = None) -> str:
+        """
+        Create a Jira issue for a finding, return the new issue key.
+
+        `custom_fields` (from discover_custom_fields(), called once per
+        create_tickets_activity run, not per ticket) is whichever of
+        CUSTOM_FIELD_COMPONENT_NAME/CUSTOM_FIELD_LINE_NAME this Jira
+        instance actually has - per-field, not all-or-nothing: only the
+        ones present get set as real custom fields, the rest stay in
+        Description.
+
+        Existing in this Jira instance doesn't guarantee usable on THIS
+        project's create screen - if Jira's response rejects the create
+        specifically because of one or both custom fields (parsed by
+        _rejected_custom_field_ids(), not just any 400), this retries the
+        exact same creation with the rejected field(s) removed and that
+        content folded back into Description instead, logging clearly so
+        a misconfigured field is visible rather than silently degraded.
+        A 400 for any other reason is untouched - _raise_for_status()
+        raises TicketValidationError exactly as it always has.
+        """
+        custom_fields = custom_fields or {}
+        component_field_id = custom_fields.get(CUSTOM_FIELD_COMPONENT_NAME)
+        line_field_id = custom_fields.get(CUSTOM_FIELD_LINE_NAME)
+
+        payload = self._build_create_payload(finding, component_field_id, line_field_id)
         response = requests.post(
             f"{self.base_url}/rest/api/3/issue",
             json=payload,
             auth=self.auth,
             headers=self.headers,
         )
+
+        if response.status_code == 400 and (component_field_id or line_field_id):
+            candidate_ids = {fid for fid in (component_field_id, line_field_id) if fid}
+            rejected = self._rejected_custom_field_ids(response, candidate_ids)
+            if rejected:
+                activity.logger.warning(
+                    f"Jira rejected custom field(s) {sorted(rejected)} for finding {finding.key} "
+                    "(present in this Jira instance but not on this project's create screen?) - "
+                    "retrying with that content folded back into Description"
+                )
+                if component_field_id in rejected:
+                    component_field_id = None
+                if line_field_id in rejected:
+                    line_field_id = None
+                payload = self._build_create_payload(finding, component_field_id, line_field_id)
+                response = requests.post(
+                    f"{self.base_url}/rest/api/3/issue",
+                    json=payload,
+                    auth=self.auth,
+                    headers=self.headers,
+                )
+
         self._raise_for_status(response, "create issue")
         issue_key = response.json()["key"]
 
@@ -156,6 +307,14 @@ class JiraClient(TicketClient):
             self._sprints.add_issue(issue_key)
         except Exception as e:
             activity.logger.warning(f"Sprint assignment failed for {issue_key}, leaving it in the backlog: {e}")
+
+        # Native remote link, not embedded Description text - a core Jira
+        # platform capability, always attempted regardless of custom-field
+        # discovery, same best-effort treatment as sprint assignment above.
+        try:
+            self._create_remote_link(issue_key, finding.deep_link)
+        except Exception as e:
+            activity.logger.warning(f"Remote link creation failed for {issue_key}, deep link not attached: {e}")
 
         return issue_key
 
@@ -292,7 +451,7 @@ class JiraClient(TicketClient):
                 "project": {"key": self.project_key},
                 "summary": summary,
                 "issuetype": {"name": "Task"},
-                "labels": ["sonarqube", ROLLUP_LABEL],
+                "labels": ["source-sonarqube", ROLLUP_LABEL],
                 "description": description,
             }
         }

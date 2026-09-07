@@ -16,11 +16,28 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      # Only read by sql/init_sonarqube_db.sql below, at first-init time -
+      # not gozu's own database, see the sonarqube service's SONAR_JDBC_*
+      # vars.
+      SONARQUBE_DB_PASSWORD: ${SONARQUBE_DB_PASSWORD}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # gozu's own schema (configs, ticket_claims, ...) is no longer
+      # created via this docker-entrypoint-initdb.d hook at all - that
+      # only ever fires once, on a genuinely fresh volume, which is
+      # exactly why --wipe used to need a separate hand-rolled re-run of
+      # the same file. config/migrations.py's run_migrations() (Alembic,
+      # called by `gozu up` and `gozu down --wipe`) is now the single,
+      # explicit, authoritative path for both cases - see migrations/.
+      #
+      # This SonarQube-database bootstrap stays on the old hook-based
+      # approach, deliberately: it's a single idempotent "ensure this
+      # database/role exists" step with no evolving schema of its own
+      # (SonarQube manages its own schema internally once pointed at an
+      # empty database) - not part of gozu's own migration history.
+      - ./sql/init_sonarqube_db.sql:/docker-entrypoint-initdb.d/init_sonarqube_db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -47,6 +64,20 @@ services:
     image: sonarqube:community
     profiles: ["sonarqube-local"]
     restart: unless-stopped
+    # Local mode's SonarQube on its own bundled H2 database isn't
+    # recommended beyond quick trials - this points it at a real Postgres
+    # database instead, in the SAME instance/container gozu's own database
+    # already runs in (not a second container), via a genuinely separate
+    # database + role (sql/init_sonarqube_db.sql) rather than a schema in
+    # gozu's own - container-to-container on the same Compose network, so
+    # no host.docker.internal indirection is needed here.
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://postgres:5432/sonarqube
+      SONAR_JDBC_USERNAME: sonarqube
+      SONAR_JDBC_PASSWORD: ${SONARQUBE_DB_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "${SONARQUBE_PORT:-9000}:9000"
     volumes:

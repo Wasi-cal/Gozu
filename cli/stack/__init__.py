@@ -28,7 +28,8 @@ from cli.stack.profiles import (
 from cli.stack.status_report import print_stack_status
 from cli.stack.webhooks import ensure_webhook_secrets, print_webhook_urls
 from cli.stack.wipe import confirm_and_wipe, gather_preview
-from cli.status import error, waiting, warning
+from cli.status import error, success, waiting, warning
+from config.migrations import run_migrations
 from scripts.env_ports import DEFAULT_PORTS, ENV_PATH, parse_env_file
 from scripts.paths import STACK_DIR
 
@@ -49,8 +50,10 @@ _PORT_LABELS: dict[str, str] = {
 
 def up(config: str | None = None) -> None:
     """
-    Brings up Postgres (needed just to read configs), then every
-    always-on/profile-active service in one `docker compose up -d`.
+    Brings up Postgres, applies any pending database migrations
+    (config/migrations.py - covers a genuinely fresh database too, not
+    just an upgrade), then every always-on/profile-active service in one
+    `docker compose up -d`.
     Wrapped in InterruptCleanup (cli/stack/cleanup.py) so a Ctrl-C/SIGTERM
     partway through only tears down what THIS invocation itself started -
     whatever was already up and healthy before this ran is left untouched.
@@ -76,6 +79,16 @@ def up(config: str | None = None) -> None:
             cleanup.track("postgres")
         waiting("Bringing up Postgres ...")
         ensure_postgres_up(STACK_DIR, cleanup=cleanup)
+
+        # Before anything else touches the config store below - migration
+        # 0001 IS the fresh-install case (config/migrations.py), applied
+        # the same way as every migration after it, so this is what
+        # actually creates the schema on a genuinely fresh database now,
+        # not Postgres's own docker-entrypoint-initdb.d hook.
+        waiting("Applying database migrations ...")
+        applied = run_migrations(STACK_DIR)
+        if applied:
+            success(f"Applied {len(applied)} migration(s): {', '.join(applied)}")
 
         if config:
             configs = [resolve_config_or_prompt(config)]
@@ -118,10 +131,13 @@ def down(wipe: bool = False) -> None:
     """
     Stop the stack. Plain `down`: containers stop (now correctly including
     profile-tagged services like sonarqube-local/webhook) - volumes/data
-    persist, same non-destructive behavior as always. `down --wipe`: also
-    removes Postgres's (and, if active, SonarQube's) volumes - the one
-    irreversible command in this CLI, gated behind typing the literal
-    word "wipe".
+    persist, same non-destructive behavior as always. `down --wipe`: resets
+    gozu's own database (configs, ticket destinations, dedupe claims) -
+    the one irreversible command in this CLI, gated behind typing the
+    literal word "wipe". Never touches local-mode SonarQube's own
+    Postgres-backed database (a genuinely separate database in the same
+    instance, see sql/init_sonarqube_db.sql) or its volumes - those aren't
+    part of --wipe's destructive scope at all.
 
     Also wrapped in InterruptCleanup: `down` itself can start Postgres
     fresh (same as `up`/`init` - it needs a live connection just to read
@@ -142,9 +158,8 @@ def down(wipe: bool = False) -> None:
         # postgres along with everything else, and counting rows needs a
         # live connection.
         destinations_count = claims_count = 0
-        wipes_sonarqube = False
         if wipe:
-            destinations_count, claims_count, wipes_sonarqube = gather_preview(profiles)
+            destinations_count, claims_count = gather_preview()
 
         stop(profiles, STACK_DIR)
         # stop() above already stopped whatever ensure_postgres_up started
@@ -156,7 +171,7 @@ def down(wipe: bool = False) -> None:
     if not wipe:
         return
 
-    confirm_and_wipe(profiles, len(configs), destinations_count, claims_count, wipes_sonarqube, STACK_DIR)
+    confirm_and_wipe(len(configs), destinations_count, claims_count, STACK_DIR)
 
 
 def status() -> None:
