@@ -36,11 +36,17 @@ import asyncio
 
 from temporalio import workflow
 
-from temporal.models.sonar_to_jira import SonarToJiraInput
-
 with workflow.unsafe.imports_passed_through():
     from core.models import CreatedTicket, TicketResult
     from temporal.workflows.scan_to_ticket import ScanToTicketWorkflow
+    # Must be passed-through, not imported at module level - see
+    # scan_to_ticket.py's own comment on this exact import for why
+    # (SonarToJiraInput has a Finding-typed field since Trivy support was
+    # added; a non-passed-through import re-executes core.models fresh in
+    # the sandbox, producing a second, distinct Finding class). Not
+    # currently reachable for Trivy in practice (a Trivy config never
+    # populates multi-branch fan-out at all), but latent otherwise.
+    from temporal.models.sonar_to_jira import SonarToJiraInput
 
 
 @workflow.defn

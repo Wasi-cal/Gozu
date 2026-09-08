@@ -5,6 +5,7 @@
 # Depends on: config/migrations.py - applying schema migrations on `gozu up`/`down`
 # Depends on: cli/config_lookup.py - resolving a config name typed by the user
 # Depends on: scripts/env_ports.py - reading each service's resolved host port for `gozu ports`
+# Depends on: cli/stack/files.py - ensure_stack_files() refreshes STACK_DIR's source tree before `gozu up`
 
 """
 `gozu up`/`gozu down` - bringing the local Docker Compose infrastructure
@@ -20,7 +21,7 @@ import typer
 import config.store as config_store
 from cli.config_lookup import resolve_config_or_prompt
 from cli.stack.cleanup import InterruptCleanup
-from cli.stack.files import require_initialized
+from cli.stack.files import ensure_stack_files, require_initialized
 from cli.stack.profiles import (
     ALL_PROFILES,
     active_profiles,
@@ -96,6 +97,19 @@ def up(config: str | None = None) -> None:
     """
     require_initialized()
 
+    # Confirmed live: without this, `gozu up` could silently run a stale
+    # worker/receiver for however long it's been since the last `gozu
+    # init` - ensure_stack_files() (materializing docker-compose.yml/the
+    # Python source tree into STACK_DIR) previously only ran during
+    # `gozu init`, never here, so any code change since then (a bug fix,
+    # a new feature) had no effect on an already-existing stack until
+    # someone happened to re-run init. Safe to call every time - it's
+    # explicitly idempotent (see its own docstring), and --build below is
+    # what actually turns a refreshed source tree into a rebuilt image;
+    # without both together, a refreshed STACK_DIR alone still wouldn't
+    # reach the running containers.
+    ensure_stack_files()
+
     with InterruptCleanup(STACK_DIR) as cleanup:
         # Tracked BEFORE calling ensure_postgres_up(), not after it returns
         # - confirmed live that an interrupt landing while still blocked
@@ -141,7 +155,15 @@ def up(config: str | None = None) -> None:
 
         ensure_webhook_secrets(configs)
 
-        command = ["docker", "compose", *profile_flags(profiles), "up", "-d"]
+        # --build: STACK_DIR's source tree was just refreshed above -
+        # without this, worker/receiver (the only services with a
+        # `build:` key at all - see docker-compose.yml) would keep
+        # running whatever image was last built, ignoring the refresh
+        # entirely. A no-op for postgres/temporal/sonarqube (no `build:`
+        # key, so --build doesn't affect them), and cheap when
+        # worker/receiver's own image genuinely hasn't changed (Docker's
+        # own layer cache, not a change gozu needs to manage itself).
+        command = ["docker", "compose", *profile_flags(profiles), "up", "-d", "--build"]
         waiting("Running: " + " ".join(command))
         result = cleanup.run(command, cwd=STACK_DIR)
         if result.returncode != 0:

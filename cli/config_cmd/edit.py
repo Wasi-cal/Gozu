@@ -80,13 +80,12 @@ def _prompt_ticket_cap(current: int | None) -> int | None:
 
 def _build_edit_fields(config: dict, state: dict) -> list[WizardField]:
     credentials = config["credentials"]
+    scanner_type = config["scanner_type"]
     scanner_mode = config["scanner_mode"]
     trigger_mode = config["trigger_mode"]
 
-    state["project_key"] = config.get("project_key") or ""
     state["ticket_cap"] = config.get("ticket_cap")
     fields = [
-        WizardField("project_key", "SonarQube project key", lambda: prompt_project_key(state.get("project_key", ""))),
         WizardField(
             "ticket_cap",
             "Per-run ticket cap (blank = default)",
@@ -94,7 +93,16 @@ def _build_edit_fields(config: dict, state: dict) -> list[WizardField]:
         ),
     ]
 
-    if scanner_mode == "local":
+    if scanner_type == "trivy":
+        # No project_key, no credentials, no branches at all - see
+        # cli/init_wizard/__init__.py's _build_fields() Trivy branch for
+        # why. Only ticket_cap and the shared Jira fields below apply.
+        pass
+    elif scanner_mode == "local":
+        state["project_key"] = config.get("project_key") or ""
+        fields.append(
+            WizardField("project_key", "SonarQube project key", lambda: prompt_project_key(state.get("project_key", "")))
+        )
         state["sonar_token"] = credentials.get("sonar_token", "")
         state["sonar_host_url"] = credentials.get("sonar_host_url", "")
         fields += [
@@ -108,6 +116,10 @@ def _build_edit_fields(config: dict, state: dict) -> list[WizardField]:
             ),
         ]
     else:
+        state["project_key"] = config.get("project_key") or ""
+        fields.append(
+            WizardField("project_key", "SonarQube project key", lambda: prompt_project_key(state.get("project_key", "")))
+        )
         state["sonar_token"] = credentials.get("sonar_token", "")
         state["sonar_organization"] = credentials.get("sonar_organization", "")
         state["branches"] = config.get("branches") or ""

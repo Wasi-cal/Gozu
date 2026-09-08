@@ -14,7 +14,7 @@ def print_summary(
     name: str,
     scanner_type: str,
     scanner_mode: str,
-    project_key: str,
+    project_key: str | None,
     sonar_plan: str | None,
     branches: str | None,
     trigger_mode: str,
@@ -24,7 +24,8 @@ def print_summary(
     success("Config created:")
     typer.echo(f"  name:           {name}")
     typer.echo(f"  scanner:        {SCANNER_REGISTRY.get(scanner_type, scanner_type)} ({scanner_mode})")
-    typer.echo(f"  project key:    {project_key}")
+    if project_key:
+        typer.echo(f"  project key:    {project_key}")
     if sonar_plan:
         typer.echo(f"  sonar plan:     {sonar_plan}")
     if branches:
@@ -39,6 +40,11 @@ def print_summary(
         warning(
             f"This config needs `gozu run --config {name} --watch` running to actually do anything - "
             "Free plan has no push-based mechanism, so nothing happens automatically on its own."
+        )
+    elif scanner_type == "trivy":
+        typer.echo(
+            f"\n`gozu run --config {name} --path <dir>` scans <dir> (defaults to the current directory) "
+            "with trivy fs."
         )
     else:
         typer.echo(f"\n`gozu run --config {name}` will use this config.")

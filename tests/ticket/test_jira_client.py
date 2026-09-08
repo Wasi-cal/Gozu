@@ -23,6 +23,24 @@ def make_finding(branch: str | None = None, finding_type: str = "vulnerability",
     )
 
 
+def make_package_finding() -> Finding:
+    """A Trivy-shaped package-level finding - no file+line at all."""
+    return Finding(
+        key="CVE-2018-1000656|flask|requirements.txt",
+        title="CVE-2018-1000656: python-flask DoS (flask)",
+        severity=Severity.HIGH,
+        component="requirements.txt",
+        line=None,
+        message="Denial of Service via crafted JSON file",
+        finding_type="vulnerability",
+        deep_link="https://avd.aquasec.com/nvd/cve-2018-1000656",
+        source_tool="trivy",
+        package_name="flask",
+        installed_version="0.12",
+        fixed_version="0.12.3",
+    )
+
+
 def make_client() -> JiraClient:
     return JiraClient(base_url="https://jira.example.com", email="bot@example.com", api_token="tok", project_key="PROJ")
 
@@ -40,8 +58,15 @@ def make_response(status_code: int, json_body: dict | list) -> MagicMock:
 def test_build_labels_without_branch_omits_branch_label():
     client = make_client()
     labels = client._build_labels(make_finding(branch=None))
-    assert labels == ["source-key-proj:src/app.py:1"]
+    assert labels == ["source-sonarqube", "source-key-proj:src/app.py:1"]
     assert not any(label.startswith("branch-") for label in labels)
+
+
+def test_build_labels_source_is_dynamic_not_hardcoded_sonarqube():
+    client = make_client()
+    labels = client._build_labels(make_package_finding())  # source_tool="trivy"
+    assert "source-trivy" in labels
+    assert "source-sonarqube" not in labels
 
 
 def test_build_labels_with_branch_includes_normalized_branch_label():
@@ -83,6 +108,44 @@ def test_build_description_omits_how_to_fix_when_absent():
     client = make_client()
     description = client._build_description(make_finding())
     assert not any(block["type"] == "codeBlock" for block in description["content"])
+
+
+def test_build_description_renders_package_details_for_package_level_finding():
+    """Branches on finding.package_name, never source_tool - see _build_description()'s own docstring."""
+    client = make_client()
+    description = client._build_description(make_package_finding())
+    text_nodes = [
+        node["text"]
+        for block in description["content"]
+        if block["type"] == "bulletList"
+        for item in block["content"]
+        for para in item["content"]
+        for node in para["content"]
+    ]
+    assert any(t == "Package: flask" for t in text_nodes)
+    assert any(t == "Installed version: 0.12" for t in text_nodes)
+    assert any(t == "Fixed version: 0.12.3" for t in text_nodes)
+    assert not any(t.startswith("Line:") for t in text_nodes)
+    # Component still shows for a package-level finding - it holds
+    # Trivy's Target (which manifest the vulnerable package was declared
+    # in), genuinely useful context, not a code-level-only concept.
+    assert any(t == "Component: requirements.txt" for t in text_nodes)
+
+
+def test_build_description_package_level_shows_not_yet_available_when_unfixed():
+    client = make_client()
+    finding = make_package_finding()
+    finding.fixed_version = None
+    description = client._build_description(finding)
+    text_nodes = [
+        node["text"]
+        for block in description["content"]
+        if block["type"] == "bulletList"
+        for item in block["content"]
+        for para in item["content"]
+        for node in para["content"]
+    ]
+    assert any(t == "Fixed version: not yet available" for t in text_nodes)
 
 
 def test_build_description_never_includes_deep_link():

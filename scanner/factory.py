@@ -4,6 +4,7 @@
 #
 # Depends on: scanner/sonarqube_cloud.py - dispatches to SonarQubeCloudClient for scanner_mode "cloud"
 # Depends on: scanner/sonarqube_server.py - dispatches to SonarQubeServerClient for scanner_mode "local"
+# Depends on: scanner/trivy_client.py - dispatches to TrivyClient for scanner_type "trivy"
 
 """Pure-builder + env-reading-wrapper pair for constructing a ScannerClient - see ticket/factory.py for the same pattern."""
 
@@ -12,6 +13,7 @@ import os
 from scanner.base import ScannerClient
 from scanner.sonarqube_cloud import SonarQubeCloudClient
 from scanner.sonarqube_server import SonarQubeServerClient
+from scanner.trivy_client import TrivyClient
 
 
 def build_scanner_client(scanner_type: str, scanner_mode: str, credentials: dict[str, str]) -> ScannerClient:
@@ -22,8 +24,16 @@ def build_scanner_client(scanner_type: str, scanner_mode: str, credentials: dict
     below is a thin env-reading wrapper around this for the legacy
     single-global-config path (the webhook receiver).
     """
+    if scanner_type == "trivy":
+        # No credentials at all - a local subprocess, not a remote API
+        # with a token. `credentials` still arrives here (every caller
+        # passes it unconditionally) but is simply never read - Trivy
+        # needing none is a property of Trivy, not a special case this
+        # function has to branch around.
+        return TrivyClient()
+
     if scanner_type != "sonarqube":
-        raise ValueError(f"Unrecognized scanner_type '{scanner_type}'. Expected 'sonarqube'.")
+        raise ValueError(f"Unrecognized scanner_type '{scanner_type}'. Expected 'sonarqube' or 'trivy'.")
 
     token = credentials.get("sonar_token", "")
     if scanner_mode == "local":

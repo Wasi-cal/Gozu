@@ -62,6 +62,7 @@ DEFAULT_SEVERITY = Severity.MEDIUM
 # future scanner here is enough to make it selectable.
 SCANNER_REGISTRY: dict[str, str] = {
     "sonarqube": "SonarQube",
+    "trivy": "Trivy",
 }
 
 

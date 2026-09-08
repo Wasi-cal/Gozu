@@ -50,6 +50,20 @@ class Finding(BaseModel):
     # a non-SonarQube scanner added later).
     how_to_fix: str | None = None
 
+    # Package-level metadata (scanner/trivy_client.py, dependency/CVE
+    # scanning) - a finding like this has no file+line at all, unlike
+    # SonarQube's code-level findings. All three are set together or not
+    # at all: package_name/installed_version always present for a
+    # package-level finding, fixed_version specifically None when the
+    # scanner reports no fix is available yet (not "unknown", a real,
+    # meaningful distinct state - see ticket/jira_client.py's description
+    # branching, which checks `if finding.package_name:` to decide
+    # code-level vs package-level rendering, never `source_tool` directly,
+    # so ticket/ stays scanner-agnostic).
+    package_name: str | None = None
+    installed_version: str | None = None
+    fixed_version: str | None = None
+
 
 class CreatedTicket(BaseModel):
     finding_key: str

@@ -63,7 +63,7 @@ def create_config(
     scanner_mode: str,
     ticket_backend: str,
     trigger_mode: str,
-    project_key: str,
+    project_key: str | None,
     credentials: dict[str, str],
     sonar_plan: str | None = None,
     branches: str | None = None,

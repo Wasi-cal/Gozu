@@ -39,3 +39,17 @@ class TicketAuthError(GozuError):
 
 class TicketValidationError(GozuError):
     """A 400 from the ticket backend (e.g. Jira) - a permanently malformed request (bad project key, invalid issue type, invalid field value), not something a retry could ever fix."""
+
+
+class ScannerExecutionError(GozuError):
+    """
+    A local scanner subprocess (e.g. Trivy) couldn't be run or didn't
+    produce usable output - the binary is missing, exited non-zero, or
+    returned malformed/unparseable output. Distinct from ScannerAuthError
+    (specifically a 401/403 from a *remote* scanner API - doesn't apply to
+    a local subprocess at all). Deliberately not marked non-retryable in
+    any RetryPolicy by default: a missing binary is permanent, but a
+    non-zero exit can also be transient (disk pressure, a killed
+    process) - callers that can tell the two apart should do so
+    themselves rather than this type assuming one or the other.
+    """

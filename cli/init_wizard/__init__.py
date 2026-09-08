@@ -9,6 +9,7 @@
 # Depends on: cli/stack/profiles.py - bringing Postgres up before saving a config
 # Depends on: cli/wizard_engine.py - the shared review/edit engine this wizard drives
 # Depends on: scanner/base.py - listing the registered scanner types to choose from
+# Depends on: cli/prerequisites/__init__.py - ensure_trivy() for a Trivy scanner_type
 
 """
 `gozu init` - the interactive setup wizard. Provisions .env, checks/
@@ -60,6 +61,7 @@ from cli.init_wizard.sonar_local import (
     select_scanner_mode,
 )
 from cli.init_wizard.summary import print_summary
+from cli.prerequisites import ensure_trivy
 from cli.prompts import ask_or_exit, generate_or_prompt_secret
 from cli.stack.cleanup import InterruptCleanup
 from cli.stack.files import ensure_stack_files
@@ -99,7 +101,7 @@ def _prompt_config_name() -> str:
 
 
 def _build_fields(
-    state: dict, stack_dir: Path, cleanup: InterruptCleanup, scanner_mode: str
+    state: dict, stack_dir: Path, cleanup: InterruptCleanup, scanner_type: str, scanner_mode: str
 ) -> tuple[list[WizardField], str, str | None]:
     """
     Resolves the remaining structural questions (SonarQube host/infra for
@@ -116,7 +118,18 @@ def _build_fields(
     fields: list[WizardField] = []
     sonar_plan: str | None = None
 
-    if scanner_mode == "local":
+    if scanner_type == "trivy":
+        # No credentials, no host, no organization, no project_key at
+        # all - a local binary scan needs none of SonarQube's fields.
+        # `gozu run --path <dir>` (defaulting to ".") selects the scan
+        # target per invocation instead of a config-persisted value - see
+        # cli/scan_runner/__init__.py's _run_trivy_scan_cycle(). "direct"
+        # is the only trigger_mode that fits: there's no async server
+        # pushing scan-complete events the way SonarQube's
+        # webhook/--watch mechanisms need - the user just runs `gozu run`
+        # whenever they want a scan.
+        trigger_mode = "direct"
+    elif scanner_mode == "local":
         state["sonar_host_url"] = ensure_local_sonarqube_host(stack_dir, cleanup)
         trigger_mode = "webhook"
         fields += [
@@ -234,13 +247,18 @@ def _commit(state: dict, name: str, scanner_type: str, scanner_mode: str, trigge
     else:
         ticket_destination_id = state["_existing_destination_id"]
 
-    credentials: dict[str, str] = {"sonar_token": state["sonar_token"]}
-    if scanner_mode == "local":
-        credentials["sonar_host_url"] = state["sonar_host_url"]
+    if scanner_type == "trivy":
+        credentials: dict[str, str] = {}
+        project_key = None
     else:
-        credentials["sonar_organization"] = state["sonar_organization"]
-    if trigger_mode == "webhook":
-        credentials["webhook_secret"] = state["webhook_secret"]
+        credentials = {"sonar_token": state["sonar_token"]}
+        if scanner_mode == "local":
+            credentials["sonar_host_url"] = state["sonar_host_url"]
+        else:
+            credentials["sonar_organization"] = state["sonar_organization"]
+        if trigger_mode == "webhook":
+            credentials["webhook_secret"] = state["webhook_secret"]
+        project_key = state["project_key"]
 
     config_store.create_config(
         name=name,
@@ -248,7 +266,7 @@ def _commit(state: dict, name: str, scanner_type: str, scanner_mode: str, trigge
         scanner_mode=scanner_mode,
         ticket_backend="jira",
         trigger_mode=trigger_mode,
-        project_key=state["project_key"],
+        project_key=project_key,
         credentials=credentials,
         sonar_plan=sonar_plan,
         branches=state.get("branches"),
@@ -258,7 +276,7 @@ def _commit(state: dict, name: str, scanner_type: str, scanner_mode: str, trigge
     destination = config_store.get_ticket_destination_by_id(ticket_destination_id)
     destination_name = destination["name"] if destination else None
     print_summary(
-        name, scanner_type, scanner_mode, state["project_key"], sonar_plan, state.get("branches"), trigger_mode, destination_name
+        name, scanner_type, scanner_mode, project_key, sonar_plan, state.get("branches"), trigger_mode, destination_name
     )
 
 
@@ -292,15 +310,29 @@ def _run_init_wizard_body(stack_dir: Path, cleanup: InterruptCleanup) -> None:
 
     typer.secho("Step 2/3: scanner + credentials", bold=True)
     scanner_type = _select_scanner()
-    scanner_mode = select_scanner_mode()
 
-    # Both scanner_modes run sonar-scanner on THIS host (see
-    # step_ensure_prerequisites()'s docstring) - unconditional, not gated
-    # on Local vs Cloud.
-    step_ensure_prerequisites()
+    if scanner_type == "trivy":
+        # "binary" (not "local"/"cloud") - Trivy has no such distinction
+        # at all, and deliberately not "local" specifically: several
+        # existing checks key Docker-profile/host-url selection off
+        # `scanner_mode == "local"` for SonarQube (cli/stack/profiles.py's
+        # active_profiles(), cli/scan_runner/config_fields.py's
+        # scanner_host_url()) - reusing "local" here would make a Trivy
+        # config incorrectly trip those SonarQube-specific checks (e.g.
+        # trying to start the sonarqube-local Docker profile a Trivy
+        # config never needs).
+        scanner_mode = "binary"
+        waiting("Checking prerequisites (trivy) ...")
+        ensure_trivy()
+    else:
+        scanner_mode = select_scanner_mode()
+        # Both scanner_modes run sonar-scanner on THIS host (see
+        # step_ensure_prerequisites()'s docstring) - unconditional, not
+        # gated on Local vs Cloud.
+        step_ensure_prerequisites()
 
     state: dict = {}
-    fields, trigger_mode, sonar_plan = _build_fields(state, stack_dir, cleanup, scanner_mode)
+    fields, trigger_mode, sonar_plan = _build_fields(state, stack_dir, cleanup, scanner_type, scanner_mode)
     state = run_wizard(fields, state, walk_first=True)
 
     typer.secho("Step 3/3: name this config", bold=True)

@@ -134,12 +134,19 @@ class JiraClient(TicketClient):
 
     def _build_labels(self, finding: Finding) -> list[str]:
         """
-        Deliberately minimal - "source-sonarqube"/"security"/"type-{type}"
-        used to also be added here, but every one of those already appears
-        as plain text in the description (Source/Type/Severity), so it was
-        pure duplication in the labels list rather than information found
-        only there. Two labels remain, both load-bearing:
+        "security"/"type-{type}" were dropped as pure duplication of the
+        description's own Type/Severity text - but "source-{source_tool}"
+        is kept (previously dropped too, then reinstated): unlike the
+        others, it's meant to be visible and filterable in Jira's Details
+        panel/JQL specifically, not just readable once you've already
+        opened the ticket - with two real scanners now (SonarQube, Trivy)
+        feeding the same project, which one produced a given ticket is
+        exactly the kind of thing worth searching/filtering on natively,
+        not just mentioned in body text. Dynamic (finding.source_tool),
+        not a hardcoded "source-sonarqube" string - that would be flatly
+        wrong for a Trivy-sourced ticket.
 
+        The other two labels remain load-bearing:
         - "source-key-{finding.key}" is NOT decorative - it's the actual
           dedupe mechanism (find_existing() searches by this exact label,
           since Jira has no concept of "external ID" to repurpose
@@ -152,7 +159,10 @@ class JiraClient(TicketClient):
           "branch-none") - useful for filtering a multi-branch project's
           tickets directly in Jira's own search/JQL.
         """
-        labels = [f"source-key-{finding.key}"]
+        labels = [
+            f"source-{_normalize_label_value(finding.source_tool)}",
+            f"source-key-{finding.key}",
+        ]
         if finding.branch:
             labels.append(f"branch-{_normalize_label_value(finding.branch)}")
         return labels
@@ -171,11 +181,25 @@ class JiraClient(TicketClient):
         isn't shown twice. deep_link is never included here at all anymore
         - it's a native remote link now (create_ticket()'s
         _create_remote_link() call), not embedded text.
+
+        Branches on `finding.package_name`, never `finding.source_tool`
+        directly - a package-level finding (Trivy: no file+line at all,
+        just a package/installed-version/fixed-version) gets those bullets
+        instead of Line; Component still shows (it holds Trivy's `Target`
+        - which manifest/lockfile the vulnerable package was declared in -
+        genuinely useful context, not a code-level concept specifically).
+        Checking a Finding field keeps this scanner-agnostic, consistent
+        with ticket/base.py's own contract - jira_client.py doesn't need
+        to know "trivy" exists as a concept to render its findings right.
         """
         details = []
         if not component_moved:
             details.append(f"Component: {finding.component}")
-        if not line_moved:
+        if finding.package_name:
+            details.append(f"Package: {finding.package_name}")
+            details.append(f"Installed version: {finding.installed_version}")
+            details.append(f"Fixed version: {finding.fixed_version or 'not yet available'}")
+        elif not line_moved:
             details.append(f"Line: {finding.line}")
         details.append(f"Type: {finding.finding_type}")
         if not severity_moved:

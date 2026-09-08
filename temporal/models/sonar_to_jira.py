@@ -6,9 +6,20 @@
 
 from pydantic import BaseModel
 
+from core.models import Finding
+
 
 class SonarToJiraInput(BaseModel):
-    project_key: str
+    # str for every SonarQube config (required there - fetch_findings_activity
+    # can't query without it). None for Trivy: a config whose scan target
+    # is a host filesystem path (cli/scan_runner's --path), not a
+    # project_key at all - see pre_fetched_findings below, which is what
+    # Trivy's path actually uses instead of this field. Confirmed live:
+    # a plain `str` here raised a pydantic ValidationError the moment a
+    # Trivy config (project_key genuinely None) tried to trigger this
+    # workflow, since fetch_findings_activity is never even called for
+    # that path to notice project_key was unused.
+    project_key: str | None = None
     task_id: str | None = None
 
     # A specific config's scanner/ticket backend + credentials, as selected
@@ -60,3 +71,28 @@ class SonarToJiraInput(BaseModel):
     # This model never re-resolves the two itself; by the time it's built,
     # that decision has already been made once, client-side.
     ticket_cap: int | None = None
+
+    # Findings already fetched HOST-SIDE (cli/scan_runner/), before this
+    # workflow was even triggered - set only for scanners whose scan is
+    # fundamentally a local-filesystem operation (Trivy `fs` mode), which
+    # the Temporal worker container cannot perform itself: the worker has
+    # no volume mount of whatever path the user ran `gozu run` against
+    # (confirmed against docker-compose.yml's `worker:` service - no
+    # `volumes:` at all), unlike SonarQube, where the worker only ever
+    # needs network access to a remote server that already holds the scan
+    # results. When this is set, ScanToTicketWorkflow.run() skips calling
+    # fetch_findings_activity entirely and uses this list directly.
+    #
+    # Real, deliberate trade-off, not an oversight: fetch_findings_activity
+    # gets Temporal's automatic RetryPolicy for free (see
+    # ScanToTicketWorkflow.run()) - a transient SonarQube API failure is
+    # retried by the workflow engine itself. A scan that populates THIS
+    # field instead ran host-side, in the CLI process, BEFORE
+    # trigger_workflow() was ever called - it is outside Temporal's
+    # activity retry boundary entirely. A transient `trivy fs` failure is
+    # therefore not automatically retried by the workflow engine; it's
+    # handled the same way cli/scan_runner/scanner_exec.py's run_scanner()
+    # already handles a transient sonar-scanner failure today - a plain
+    # exception, no retry loop of its own. Not a new gap Trivy introduces,
+    # the same one SonarQube's own host-side scan step already has.
+    pre_fetched_findings: list[Finding] | None = None
