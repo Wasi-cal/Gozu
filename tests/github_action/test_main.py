@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.models import Finding, Severity
-from github_action.main import main
+from github_action.main import _add_llm_explanation, main
 
 MODULE = "github_action.main"
 _FAKE_PNG = b"\x89PNG\r\n\x1a\nfake-png-bytes"
@@ -17,19 +17,21 @@ def action_env(monkeypatch):
     monkeypatch.setenv("SONAR_PROJECT_KEY", "proj")
     monkeypatch.setenv("COMMIT_TIMESTAMP", "2026-09-04T12:00:00+00:00")
     monkeypatch.setenv("SONAR_TOKEN", "sonar-token")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
-def make_finding(key: str = "ABC-1") -> Finding:
+def make_finding(key: str = "ABC-1", severity: Severity = Severity.HIGH) -> Finding:
     return Finding(
         key=key,
         title="Some vulnerability (file.py:1)",
-        severity=Severity.HIGH,
+        severity=severity,
         component="proj:file.py",
         line=1,
         message="some message",
         finding_type="vulnerability",
         deep_link="https://sonarcloud.io/project/issues?id=proj",
         source_tool="sonarqube",
+        rule_key="python:S5443",
     )
 
 
@@ -134,3 +136,68 @@ def test_exits_nonzero_when_scanner_client_is_not_cloud(caplog):
     assert exc_info.value.code == 1
     assert "doesn't support wait_for_latest_analysis" in caplog.text
     ticket_client.find_existing.assert_not_called()
+
+
+# --- _add_llm_explanation (LLM enrichment gating) ---
+
+
+def test_add_llm_explanation_sets_field_when_key_configured(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-...")
+    finding = make_finding(severity=Severity.HIGH)
+
+    with patch(f"{MODULE}.build_llm_client", return_value=MagicMock()), \
+         patch(f"{MODULE}.enrich_finding", return_value="Explanation") as mock_enrich:
+        _add_llm_explanation(finding, "sonar-token")
+
+    assert finding.llm_explanation == "Explanation"
+    mock_enrich.assert_called_once()
+
+
+def test_add_llm_explanation_skips_without_env_var():
+    finding = make_finding(severity=Severity.HIGH)  # ANTHROPIC_API_KEY unset by the action_env fixture
+
+    with patch(f"{MODULE}.enrich_finding") as mock_enrich:
+        _add_llm_explanation(finding, "sonar-token")
+
+    mock_enrich.assert_not_called()
+    assert finding.llm_explanation is None
+
+
+def test_add_llm_explanation_skips_medium_severity(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-...")
+    finding = make_finding(severity=Severity.MEDIUM)
+
+    with patch(f"{MODULE}.enrich_finding") as mock_enrich:
+        _add_llm_explanation(finding, "sonar-token")
+
+    mock_enrich.assert_not_called()
+
+
+def test_add_llm_explanation_failure_does_not_raise(monkeypatch, caplog):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-...")
+    finding = make_finding(severity=Severity.HIGH)
+
+    with patch(f"{MODULE}.build_llm_client", side_effect=RuntimeError("bad key")):
+        _add_llm_explanation(finding, "sonar-token")  # must not raise
+
+    assert finding.llm_explanation is None
+    assert finding.key in caplog.text
+
+
+def test_llm_explanation_is_set_before_create_ticket_is_called(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-...")
+    finding = make_finding()
+    scanner_client = make_scanner_client([finding])
+    ticket_client = MagicMock()
+    ticket_client.find_existing.return_value = None
+    seen_explanation_at_create_time = []
+    ticket_client.create_ticket.side_effect = lambda f: seen_explanation_at_create_time.append(f.llm_explanation) or "PROJ-4"
+
+    with patch(f"{MODULE}.get_scanner_client", return_value=scanner_client), \
+         patch(f"{MODULE}.get_ticket_client", return_value=ticket_client), \
+         patch(f"{MODULE}.render_finding_snippet", return_value=_FAKE_PNG), \
+         patch(f"{MODULE}.build_llm_client", return_value=MagicMock()), \
+         patch(f"{MODULE}.enrich_finding", return_value="Explanation"):
+        main()
+
+    assert seen_explanation_at_create_time == ["Explanation"]

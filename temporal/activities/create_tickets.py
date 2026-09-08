@@ -1,19 +1,56 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
 # Depends on: ticket/claims.py - ledger-based dedupe/claim of finding-to-ticket assignments
 # Depends on: ticket/factory.py - builds/gets the ticket client used to create tickets
+# Depends on: llm/factory.py - builds the optional LLM-enrichment client
+# Depends on: llm/enrich.py - generates a finding's LLM explanation
 
 """Activity: create a ticket for each finding that doesn't already have one."""
 
 from temporalio import activity
 
-from core.models import CreatedTicket, TicketResult
+from core.models import CreatedTicket, Finding, Severity, TicketResult
+from llm.enrich import enrich_finding
+from llm.factory import build_llm_client
 from temporal.models.create_tickets import CreateTicketsInput
 from ticket import claims
 from ticket.factory import build_ticket_client, get_ticket_client
-from ticket.jira_client import CUSTOM_FIELD_COMPONENT_NAME, CUSTOM_FIELD_LINE_NAME, CUSTOM_FIELD_SEVERITY_NAME
+from ticket.jira_client import (
+    CUSTOM_FIELD_COMPONENT_NAME,
+    CUSTOM_FIELD_LINE_NAME,
+    CUSTOM_FIELD_SEVERITY_NAME,
+)
+
+# Only a genuinely-new Blocker/Critical/High ticket gets an LLM call -
+# BLOCKER and CRITICAL both collapse to normalized Severity.CRITICAL (see
+# scanner/base.py's SONAR_SEVERITY_MAP), so this already covers "Blocker
+# and Critical" as two raw severities without a third normalized value.
+_LLM_ELIGIBLE_SEVERITIES = (Severity.CRITICAL, Severity.HIGH)
+
+
+def _add_llm_explanation(finding: Finding, credentials: dict[str, str]) -> None:
+    """
+    Best-effort, same treatment as custom field discovery/rollup ticket
+    above - a failure here must never block ticket creation, and
+    finding.llm_explanation simply stays None (the ticket falls back to
+    finding.message). Called only once a finding has passed every
+    ledger/cap/claim/find_existing check and is genuinely about to get a
+    brand-new ticket - enriching earlier would waste an LLM call on every
+    already-ticketed Critical/High finding on every scan cycle, forever.
+    """
+    if finding.severity not in _LLM_ELIGIBLE_SEVERITIES:
+        return
+    anthropic_key = credentials.get("anthropic_api_key")
+    if not anthropic_key:
+        return
+    try:
+        llm_client = build_llm_client(anthropic_key)
+        finding.llm_explanation = enrich_finding(llm_client, finding, credentials.get("sonar_token", ""))
+    except Exception as e:
+        activity.logger.warning(f"LLM enrichment failed for finding {finding.key}: {e}")
 
 # Per-run cap on genuinely new tickets (Jira issue-create calls) - a named
 # constant, not a magic number, since a large one-off backlog (e.g. this
@@ -123,6 +160,7 @@ async def create_tickets_activity(input: CreateTicketsInput) -> TicketResult:
                     skipped.append(finding.key)
                     continue
 
+                _add_llm_explanation(finding, input.credentials)
                 ticket_key = client.create_ticket(finding, custom_fields)
                 claims.record_ticket(conn, destination, finding.key, ticket_key)
                 created.append(CreatedTicket(finding_key=finding.key, ticket_key=ticket_key))

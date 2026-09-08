@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
 
 """
 Doc links shown before each credential prompt in the init wizard, so a user
@@ -26,6 +27,7 @@ HELP_LINKS: dict[str, str] = {
     "jira_email": "https://id.atlassian.com/manage-profile/profile-and-visibility",
     "jira_project_key": "https://confluence.atlassian.com/jirakb/how-to-get-project-id-from-the-jira-user-interface-827341414.html",
     "webhook_secret": "https://docs.sonarsource.com/sonarqube-cloud/managing-your-projects/administering-your-projects/integrations/webhooks",
+    "anthropic_api_key": "https://platform.claude.com/settings/keys",
 }
 
 

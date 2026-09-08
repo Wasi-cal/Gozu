@@ -7,6 +7,8 @@
 # Depends on: scanner/factory.py - builds the scanner client from env vars
 # Depends on: scanner/screenshot.py - renders a finding's code snippet for the ticket attachment
 # Depends on: ticket/factory.py - builds the ticket client from env vars
+# Depends on: llm/factory.py - builds the optional LLM-enrichment client
+# Depends on: llm/enrich.py - generates a finding's LLM explanation
 
 """
 Entrypoint for the standalone GitHub Action
@@ -37,7 +39,9 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from core.models import Finding
+from core.models import Finding, Severity
+from llm.enrich import enrich_finding
+from llm.factory import build_llm_client
 from scanner.factory import get_scanner_client
 from scanner.screenshot import render_finding_snippet
 from ticket.factory import get_ticket_client
@@ -46,6 +50,32 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 _BRANCH = "main"
+
+# Same gate as temporal/activities/create_tickets.py's _add_llm_explanation -
+# see that module's comment for why BLOCKER/CRITICAL/MAJOR collapse to just
+# these two normalized values.
+_LLM_ELIGIBLE_SEVERITIES = (Severity.CRITICAL, Severity.HIGH)
+
+
+def _add_llm_explanation(finding: Finding, sonar_token: str) -> None:
+    """
+    Mirrors temporal/activities/create_tickets.py's _add_llm_explanation -
+    same eligibility/best-effort logic, but reading ANTHROPIC_API_KEY
+    straight from the environment (this entrypoint's credentials always
+    come from GitHub Actions secrets, never a config store) and logging via
+    the module's plain logger instead of activity.logger (see this file's
+    docstring on why - no Temporal context exists here).
+    """
+    if finding.severity not in _LLM_ELIGIBLE_SEVERITIES:
+        return
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not anthropic_key:
+        return
+    try:
+        llm_client = build_llm_client(anthropic_key)
+        finding.llm_explanation = enrich_finding(llm_client, finding, sonar_token)
+    except Exception as e:
+        logger.warning(f"LLM enrichment failed for finding {finding.key}: {e}")
 
 
 def _write_step_summary(text: str) -> None:
@@ -143,6 +173,7 @@ def main() -> None:
         if existing:
             skipped.append(finding.key)
             continue
+        _add_llm_explanation(finding, sonar_token)
         ticket_key = ticket_client.create_ticket(finding)
         created.append((finding, ticket_key))
 

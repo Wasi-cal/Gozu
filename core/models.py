@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
 
 """
 Normalized domain vocabulary shared by every scanner adapter (scanner/client.py)
@@ -49,6 +50,18 @@ class Finding(BaseModel):
     # scanner has no such guidance for this rule, or none at all (e.g.
     # a non-SonarQube scanner added later).
     how_to_fix: str | None = None
+    # The scanner's own rule identifier (e.g. "python:S2068"), stamped by
+    # fetch_sonarqube_findings() - llm/enrich.py needs it to recognize
+    # hardcoded-credential rules and withhold the code snippet for those
+    # (see llm/enrich.py's _is_credential_rule()).
+    rule_key: str | None = None
+    # LLM-generated plain-English explanation + suggested fix, set by
+    # create_tickets_activity/github_action.main for a genuinely-new
+    # Blocker/Critical/High ticket only (see llm/enrich.py). None means
+    # "not generated" (no anthropic_api_key configured, non-eligible
+    # severity, or the call failed) - the ticket falls back to
+    # finding.message, exactly like before this field existed.
+    llm_explanation: str | None = None
 
     # Package-level metadata (scanner/trivy_client.py, dependency/CVE
     # scanning) - a finding like this has no file+line at all, unlike

@@ -78,7 +78,7 @@ _DIRECTORY_ASSETS = ["sql", "migrations"]
 # (pyproject.toml's wheel `include` list) - already installed wherever
 # gozu itself is installed, so these are copied from the running
 # installation, not from a second bundled copy.
-_SOURCE_PACKAGES = ["core", "scanner", "ticket", "temporal", "receiver", "cli", "scripts", "config"]
+_SOURCE_PACKAGES = ["core", "scanner", "ticket", "temporal", "receiver", "cli", "scripts", "config", "llm"]
 
 _SKIP_DIR_NAMES = {"__pycache__", "_stackfiles"}
 

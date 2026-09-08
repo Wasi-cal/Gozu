@@ -1,9 +1,11 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
 #
 # Depends on: config/store.py - reading and updating a config's fields/credentials
 # Depends on: cli/config_lookup.py - resolving a config name typed by the user
 # Depends on: cli/init_wizard/jira_step.py - reusing its Jira credential prompt functions
+# Depends on: cli/init_wizard/llm_step.py - reusing its Anthropic API key prompt function
 # Depends on: cli/init_wizard/sonar_cloud.py - reusing its SonarQube Cloud credential prompt functions
 # Depends on: cli/init_wizard/sonar_local.py - reusing its SonarQube Local credential prompt functions
 # Depends on: cli/stack/__init__.py - ensuring the config store is ready before editing
@@ -31,7 +33,12 @@ from cli.init_wizard.jira_step import (
     prompt_jira_project_key,
     prompt_jira_url,
 )
-from cli.init_wizard.sonar_cloud import prompt_premium_branches, prompt_sonar_organization, prompt_sonar_token_cloud
+from cli.init_wizard.llm_step import prompt_anthropic_api_key
+from cli.init_wizard.sonar_cloud import (
+    prompt_premium_branches,
+    prompt_sonar_organization,
+    prompt_sonar_token_cloud,
+)
 from cli.init_wizard.sonar_local import prompt_project_key, prompt_sonar_token_local
 from cli.prompts import ask_or_exit, generate_or_prompt_secret, prompt_text
 from cli.stack import ensure_config_store_ready
@@ -169,6 +176,16 @@ def _build_edit_fields(config: dict, state: dict) -> list[WizardField]:
             "jira_project_key", "Jira project key", lambda: prompt_jira_project_key(state.get("jira_project_key", ""))
         ),
     ]
+
+    state["anthropic_api_key"] = credentials.get("anthropic_api_key", "")
+    fields.append(
+        WizardField(
+            "anthropic_api_key",
+            "Anthropic API key (optional)",
+            lambda: prompt_anthropic_api_key(state.get("anthropic_api_key", "")),
+            secret=True,
+        )
+    )
     return fields
 
 

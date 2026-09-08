@@ -5,10 +5,19 @@ from unittest.mock import MagicMock, patch
 
 from core.errors import TicketValidationError
 from core.models import Finding, Severity
-from ticket.jira_client import CUSTOM_FIELD_COMPONENT_NAME, CUSTOM_FIELD_LINE_NAME, JiraClient
+from ticket.jira_client import (
+    CUSTOM_FIELD_COMPONENT_NAME,
+    CUSTOM_FIELD_LINE_NAME,
+    JiraClient,
+)
 
 
-def make_finding(branch: str | None = None, finding_type: str = "vulnerability", line: int | None = 42) -> Finding:
+def make_finding(
+    branch: str | None = None,
+    finding_type: str = "vulnerability",
+    line: int | None = 42,
+    llm_explanation: str | None = None,
+) -> Finding:
     return Finding(
         key="proj:src/app.py:1",
         title="Hardcoded credentials",
@@ -20,6 +29,7 @@ def make_finding(branch: str | None = None, finding_type: str = "vulnerability",
         deep_link="https://sonar.example.com/project/issues?id=proj&open=x",
         source_tool="sonarqube",
         branch=branch,
+        llm_explanation=llm_explanation,
     )
 
 
@@ -153,6 +163,21 @@ def test_build_description_never_includes_deep_link():
     description = client._build_description(make_finding())
     rendered = str(description)
     assert "example.com/project/issues" not in rendered
+
+
+def test_build_description_prefers_llm_explanation_over_message():
+    client = make_client()
+    description = client._build_description(make_finding(llm_explanation="This is risky because ..."))
+    rendered = str(description)
+    assert "This is risky because ..." in rendered
+    assert "Don't hardcode credentials" not in rendered
+
+
+def test_build_description_falls_back_to_message_when_no_llm_explanation():
+    client = make_client()
+    description = client._build_description(make_finding(llm_explanation=None))
+    rendered = str(description)
+    assert "Don't hardcode credentials" in rendered
 
 
 # --- Custom field discovery (Part B, item 3) ---

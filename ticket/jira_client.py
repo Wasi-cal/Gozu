@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
 #
 # Depends on: Jira (Atlassian) - direct API client
 # Depends on: ticket/adf.py - ADF document builders for issue descriptions/comments
@@ -208,7 +209,10 @@ class JiraClient(TicketClient):
             f"Source: {finding.source_tool}",
             f"Branch: {finding.branch or 'unknown'}",
         ]
-        content = [paragraph(finding.message), bullet_list(details)]
+        # llm_explanation, when present, replaces the raw SonarQube message
+        # with an LLM-generated plain-English explanation + suggested fix -
+        # see core/models.Finding's llm_explanation docstring.
+        content = [paragraph(finding.llm_explanation or finding.message), bullet_list(details)]
         if finding.how_to_fix:
             # Rule-level guidance ("fix this class of issue"), never a fix
             # tailored to this exact line - see core/models.Finding's
