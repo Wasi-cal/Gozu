@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
 #
 # Depends on: SonarQube (SonarSource) - direct API client
 # Depends on: scanner/sonarqube_classify.py - is_security_relevant() classification of raw issues
@@ -169,6 +170,7 @@ class SonarQubeIssueFetcher:
                     deep_link=f"{self.base_url}/project/issues?id={project_key}&issues={key}",
                     source_tool="sonarqube",
                     how_to_fix=how_to_fix,
+                    rule_key=rule or None,
                 )
             )
         return findings

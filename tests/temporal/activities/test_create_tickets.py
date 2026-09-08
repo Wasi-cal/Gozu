@@ -1,26 +1,31 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
 
 from unittest.mock import MagicMock, patch
 
 from core.models import Finding, Severity
-from temporal.activities.create_tickets import create_tickets_activity
+from temporal.activities.create_tickets import (
+    _add_llm_explanation,
+    create_tickets_activity,
+)
 from temporal.models.create_tickets import CreateTicketsInput
 
 MODULE = "temporal.activities.create_tickets"
 
 
-def make_finding(key: str) -> Finding:
+def make_finding(key: str, severity: Severity = Severity.HIGH) -> Finding:
     return Finding(
         key=key,
         title="Some vulnerability",
-        severity=Severity.HIGH,
+        severity=severity,
         component="proj:file.py",
         line=1,
         message="some message",
         finding_type="vulnerability",
         deep_link="http://localhost:9000/project/issues?id=proj",
         source_tool="sonarqube",
+        rule_key="python:S5443",
     )
 
 
@@ -119,3 +124,99 @@ async def test_discover_custom_fields_only_called_once_per_activity_not_per_find
         await create_tickets_activity(CreateTicketsInput(findings=findings))
 
     client.discover_custom_fields.assert_called_once()
+
+
+# --- _add_llm_explanation (LLM enrichment gating) ---
+
+
+def test_add_llm_explanation_sets_field_for_high_severity_with_key_configured():
+    finding = make_finding("k1", severity=Severity.HIGH)
+    llm_client = MagicMock()
+
+    with patch(f"{MODULE}.build_llm_client", return_value=llm_client) as mock_build, \
+         patch(f"{MODULE}.enrich_finding", return_value="Explanation") as mock_enrich:
+        _add_llm_explanation(finding, {"anthropic_api_key": "sk-ant-...", "sonar_token": "tok"})
+
+    assert finding.llm_explanation == "Explanation"
+    mock_build.assert_called_once_with("sk-ant-...")
+    mock_enrich.assert_called_once_with(llm_client, finding, "tok")
+
+
+def test_add_llm_explanation_sets_field_for_critical_severity():
+    finding = make_finding("k1", severity=Severity.CRITICAL)
+
+    with patch(f"{MODULE}.build_llm_client", return_value=MagicMock()), \
+         patch(f"{MODULE}.enrich_finding", return_value="Explanation"):
+        _add_llm_explanation(finding, {"anthropic_api_key": "sk-ant-..."})
+
+    assert finding.llm_explanation == "Explanation"
+
+
+def test_add_llm_explanation_skips_medium_severity():
+    finding = make_finding("k1", severity=Severity.MEDIUM)
+
+    with patch(f"{MODULE}.enrich_finding") as mock_enrich:
+        _add_llm_explanation(finding, {"anthropic_api_key": "sk-ant-..."})
+
+    mock_enrich.assert_not_called()
+    assert finding.llm_explanation is None
+
+
+def test_add_llm_explanation_skips_low_severity():
+    finding = make_finding("k1", severity=Severity.LOW)
+
+    with patch(f"{MODULE}.enrich_finding") as mock_enrich:
+        _add_llm_explanation(finding, {"anthropic_api_key": "sk-ant-..."})
+
+    mock_enrich.assert_not_called()
+
+
+def test_add_llm_explanation_skips_when_no_anthropic_key_configured():
+    finding = make_finding("k1", severity=Severity.HIGH)
+
+    with patch(f"{MODULE}.enrich_finding") as mock_enrich:
+        _add_llm_explanation(finding, {"sonar_token": "tok"})
+
+    mock_enrich.assert_not_called()
+    assert finding.llm_explanation is None
+
+
+def test_add_llm_explanation_failure_is_caught_and_leaves_field_none():
+    finding = make_finding("k1", severity=Severity.HIGH)
+
+    with patch(f"{MODULE}.build_llm_client", side_effect=RuntimeError("bad key")):
+        _add_llm_explanation(finding, {"anthropic_api_key": "sk-ant-..."})  # must not raise
+
+    assert finding.llm_explanation is None
+
+
+async def test_llm_explanation_is_set_before_create_ticket_is_called():
+    """Placement matters: enrichment must run only for a genuinely-new ticket, right before create_ticket()."""
+    finding = make_finding("k1", severity=Severity.HIGH)
+    client = make_client()
+    seen_explanation_at_create_time = []
+    client.create_ticket.side_effect = lambda f, custom_fields=None: (
+        seen_explanation_at_create_time.append(f.llm_explanation) or "PROJ-1"
+    )
+
+    with patched_claims(), \
+         patch(f"{MODULE}.build_ticket_client", return_value=client), \
+         patch(f"{MODULE}.build_llm_client", return_value=MagicMock()), \
+         patch(f"{MODULE}.enrich_finding", return_value="Explanation"):
+        await create_tickets_activity(
+            CreateTicketsInput(findings=[finding], credentials={"anthropic_api_key": "sk-ant-..."})
+        )
+
+    assert seen_explanation_at_create_time == ["Explanation"]
+
+
+async def test_llm_explanation_not_generated_without_anthropic_key_in_credentials():
+    finding = make_finding("k1", severity=Severity.HIGH)
+    client = make_client()
+
+    with patched_claims(), \
+         patch(f"{MODULE}.build_ticket_client", return_value=client), \
+         patch(f"{MODULE}.enrich_finding") as mock_enrich:
+        await create_tickets_activity(CreateTicketsInput(findings=[finding], credentials={"sonar_token": "tok"}))
+
+    mock_enrich.assert_not_called()

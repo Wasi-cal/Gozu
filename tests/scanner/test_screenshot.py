@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import requests
 
 from core.models import Finding, Severity
-from scanner.screenshot import _fetch_snippet_lines, _host_url_from_deep_link, render_finding_snippet
+from scanner.screenshot import fetch_snippet_lines, _host_url_from_deep_link, render_finding_snippet
 
 
 def make_finding(line: int | None = 5, component: str = "proj:hello.py", deep_link: str | None = None) -> Finding:
@@ -46,7 +46,7 @@ def test_fetch_snippet_lines_clamps_from_line_to_one():
     response = make_sources_response({1: "a", 2: "b", 3: "c", 4: "d", 5: "e", 6: "f", 7: "g"})
     with patch("scanner.screenshot.requests.get", return_value=response) as mock_get:
         with patch("scanner.screenshot.resolve_container_host", side_effect=lambda url: url):
-            lines, from_line = _fetch_snippet_lines(finding, "tok", context_lines=5)
+            lines, from_line = fetch_snippet_lines(finding, "tok", context_lines=5)
 
     assert from_line == 1  # line=2, context=5 -> raw from would be -3, clamped to 1
     called_params = mock_get.call_args.kwargs["params"]
@@ -59,7 +59,7 @@ def test_fetch_snippet_lines_strips_html_from_each_line():
     response = make_sources_response({1: '<span class="k">import</span> hashlib'})
     with patch("scanner.screenshot.requests.get", return_value=response):
         with patch("scanner.screenshot.resolve_container_host", side_effect=lambda url: url):
-            lines, _ = _fetch_snippet_lines(finding, "tok", context_lines=0)
+            lines, _ = fetch_snippet_lines(finding, "tok", context_lines=0)
 
     assert lines == ["import hashlib"]
 
@@ -71,7 +71,7 @@ def test_fetch_snippet_lines_raises_on_error_response():
     with patch("scanner.screenshot.requests.get", return_value=response):
         with patch("scanner.screenshot.resolve_container_host", side_effect=lambda url: url):
             try:
-                _fetch_snippet_lines(finding, "tok", context_lines=5)
+                fetch_snippet_lines(finding, "tok", context_lines=5)
                 assert False, "expected HTTPError to propagate"
             except requests.HTTPError:
                 pass
