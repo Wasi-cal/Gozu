@@ -104,6 +104,15 @@ def run_scan_cycle(
     # as its one implicit branch - see scanner_exec.py's _build_scanner_command().
     branch = detect_git_branch(path) if config.get("sonar_plan") == "premium" else None
 
+    # Unlike `branch` above, ticket labeling has no backend restriction to
+    # respect - SonarQube never needs to know or agree with this value for
+    # it to be useful on a Jira ticket, so this is detected for every
+    # scanner_mode/sonar_plan, not just Premium (see
+    # SonarToJiraInput.display_branch's docstring). Confirmed live: without
+    # this, every local/Free-plan ticket showed "Branch: unknown" even
+    # when the scanned checkout was on a real, named branch.
+    display_branch = detect_git_branch(path)
+
     waiting(f"Running sonar-scanner against {path} ...")
     run_scanner(config, path, branch)
 
@@ -113,7 +122,7 @@ def run_scan_cycle(
     wait_for_analysis(scanner_host_url(config), config["credentials"]["sonar_token"], ce_task_id)
     waiting("Analysis finished - triggering ScanToTicketWorkflow ...")
 
-    ticket_result = asyncio.run(trigger_workflow(config, ce_task_id, branch, effective_ticket_cap))
+    ticket_result = asyncio.run(trigger_workflow(config, ce_task_id, branch, display_branch, effective_ticket_cap))
 
     if skip_unchanged and pre_scan_git_state is not None:
         sha, dirty = pre_scan_git_state

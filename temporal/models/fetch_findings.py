@@ -12,3 +12,8 @@ class FetchFindingsInput(BaseModel):
     scanner_mode: str = "local"
     credentials: dict[str, str] = {}
     branch: str | None = None
+
+    # Purely for labeling findings (finding.branch, shown on the Jira
+    # ticket) - see SonarToJiraInput.display_branch's docstring for why
+    # this is a separate value from `branch` above, not the same one.
+    display_branch: str | None = None

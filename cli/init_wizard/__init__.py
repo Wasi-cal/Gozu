@@ -184,9 +184,19 @@ def _build_fields(
     state["_destination_choice"] = destination_choice
     state["_existing_destination_id"] = existing_destination_id
     if destination_choice == "new":
-        typer.secho("Jira details", bold=True)
+        def _prompt_destination_name() -> str:
+            # Printed here, not inline above - this whole function only
+            # BUILDS the field list; run_wizard() is what actually
+            # prompts each field, later and in list order (SonarQube
+            # fields first). A plain typer.secho() here would fire while
+            # still building the list, before the SonarQube fields above
+            # had even been prompted yet - confirmed live, that showed
+            # this header before the *previous* section's own prompts.
+            typer.secho("Jira details", bold=True)
+            return prompt_destination_name()
+
         fields += [
-            WizardField("destination_name", "Ticket destination name", prompt_destination_name),
+            WizardField("destination_name", "Ticket destination name", _prompt_destination_name),
             WizardField("jira_url", "Jira URL", lambda: prompt_jira_url(state.get("jira_url", ""))),
             WizardField("jira_email", "Jira account email", lambda: prompt_jira_email(state.get("jira_email", ""))),
             WizardField(

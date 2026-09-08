@@ -47,7 +47,17 @@ async def fetch_findings_activity(input: FetchFindingsInput) -> list[Finding]:
     branch = input.branch if input.branch is not None else _get_git_branch()
     findings = client.fetch_findings(input.project_key, branch=branch)
 
+    # Deliberately NOT always `branch` - that value is also what scoped the
+    # fetch_findings() query above, which stays gated to configs SonarQube
+    # actually supports branch-scoping for (see SonarToJiraInput.branch's
+    # docstring: None for local/Community and Cloud Free). Ticket labeling
+    # has no such restriction - display_branch is the host's real git
+    # branch regardless of scanner_mode/sonar_plan (see
+    # cli/scan_runner/__init__.py), so a local/Free config's tickets show
+    # the actual branch scanned instead of "unknown" just because
+    # SonarQube itself couldn't be told to scope by it.
+    label = input.display_branch if input.display_branch is not None else branch
     for finding in findings:
-        finding.branch = branch
+        finding.branch = label
 
     return findings

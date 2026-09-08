@@ -49,6 +49,7 @@ class ScanToTicketWorkflow:
                 scanner_mode=input.scanner_mode,
                 credentials=input.credentials,
                 branch=input.branch,
+                display_branch=input.display_branch,
             ),
             start_to_close_timeout=timedelta(seconds=30),
             # SonarQube's issues/hotspots search index can lag a few seconds

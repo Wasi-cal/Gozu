@@ -26,7 +26,13 @@ from temporal.workflows.reconcile_only import ReconcileOnlyWorkflow
 from temporal.workflows.scan_to_ticket import ScanToTicketWorkflow
 
 
-async def trigger_workflow(config: dict, ce_task_id: str, branch: str | None, ticket_cap: int | None = None) -> TicketResult:
+async def trigger_workflow(
+    config: dict,
+    ce_task_id: str,
+    branch: str | None,
+    display_branch: str | None,
+    ticket_cap: int | None = None,
+) -> TicketResult:
     """
     Connects to the *host*-visible Temporal address (localhost:{TEMPORAL_PORT})
     - this runs on the host, not inside the Docker network, so it must NOT
@@ -59,6 +65,7 @@ async def trigger_workflow(config: dict, ce_task_id: str, branch: str | None, ti
         ticket_backend=config["ticket_backend"],
         credentials=config["credentials"],
         branch=branch,
+        display_branch=display_branch,
         ticket_cap=ticket_cap,
     )
     workflow_id = f"sonar-jira-{ce_task_id}"

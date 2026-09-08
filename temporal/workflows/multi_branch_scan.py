@@ -60,7 +60,7 @@ class MultiBranchScanWorkflow:
             *[
                 workflow.execute_child_workflow(
                     ScanToTicketWorkflow.run,
-                    input.model_copy(update={"branch": branch}),
+                    input.model_copy(update={"branch": branch, "display_branch": branch}),
                     id=f"{parent_id}-{branch.replace('/', '-')}",
                 )
                 for branch in branches
