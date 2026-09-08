@@ -9,6 +9,7 @@
 # Depends on: cli/stack/profiles.py - bringing Postgres up before saving a config
 # Depends on: cli/wizard_engine.py - the shared review/edit engine this wizard drives
 # Depends on: scanner/base.py - listing the registered scanner types to choose from
+# Depends on: cli/init_wizard/llm_step.py - the optional Anthropic API key prompt
 
 """
 `gozu init` - the interactive setup wizard. Provisions .env, checks/
@@ -44,6 +45,7 @@ from cli.init_wizard.jira_step import (
     prompt_jira_project_key,
     prompt_jira_url,
 )
+from cli.init_wizard.llm_step import prompt_anthropic_api_key
 from cli.init_wizard.sonar_cloud import (
     confirm_free_plan_limitation,
     prompt_free_branch,
@@ -210,6 +212,15 @@ def _build_fields(
             ),
         ]
 
+    fields.append(
+        WizardField(
+            "anthropic_api_key",
+            "Anthropic API key (optional)",
+            lambda: prompt_anthropic_api_key(state.get("anthropic_api_key", "")),
+            secret=True,
+        )
+    )
+
     return fields, trigger_mode, sonar_plan
 
 
@@ -241,6 +252,8 @@ def _commit(state: dict, name: str, scanner_type: str, scanner_mode: str, trigge
         credentials["sonar_organization"] = state["sonar_organization"]
     if trigger_mode == "webhook":
         credentials["webhook_secret"] = state["webhook_secret"]
+    if state.get("anthropic_api_key"):
+        credentials["anthropic_api_key"] = state["anthropic_api_key"]
 
     config_store.create_config(
         name=name,

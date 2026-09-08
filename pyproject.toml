@@ -24,6 +24,7 @@ dependencies = [
     "alembic>=1.19.2",
     "pygments>=2.21.0",
     "pillow>=12.3.0",
+    "anthropic>=1.4.0",
 ]
 
 [project.scripts]

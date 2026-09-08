@@ -62,4 +62,8 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
           COMMIT_TIMESTAMP: ${{ github.event.head_commit.timestamp }}
+          # Optional - blank/unset disables LLM-generated ticket explanations
+          # for Blocker/Critical/High findings (see llm/enrich.py); tickets
+          # fall back to today's templated description either way.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: gozu-github-action

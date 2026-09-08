@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
 #
 # Depends on: scanner/base.py - resolve_container_host() for Docker container-host URL rewriting
 # Depends on: scanner/html_text.py - strip_html() for SonarQube's syntax-highlighting markup
@@ -48,11 +49,14 @@ def _host_url_from_deep_link(deep_link: str) -> str:
     return f"{parts.scheme}://{parts.netloc}"
 
 
-def _fetch_snippet_lines(finding: Finding, token: str, context_lines: int) -> tuple[list[str], int]:
+def fetch_snippet_lines(finding: Finding, token: str, context_lines: int) -> tuple[list[str], int]:
     """
     Returns (plain-text source lines, the first line's real file line
     number) - the caller needs that offset to know where the flagged
     line falls WITHIN the returned snippet, not just within the file.
+
+    Public - llm/enrich.py is a second caller (fetches a wider context
+    window to hand to the LLM alongside the rule's how-to-fix guidance).
     """
     line = finding.line or 1
     from_line = max(1, line - context_lines)
@@ -80,7 +84,7 @@ def render_finding_snippet(finding: Finding, token: str, context_lines: int = DE
     (temporal/activities/capture_and_attach_screenshot.py) is what
     decides how to make that visible, not this function.
     """
-    lines, from_line = _fetch_snippet_lines(finding, token, context_lines)
+    lines, from_line = fetch_snippet_lines(finding, token, context_lines)
     code = "\n".join(lines)
 
     path = finding.component.split(":", 1)[-1]  # component is "{project_key}:{relative/path}"
