@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import requests
 
 from core.models import Finding, Severity
-from scanner.screenshot import _fetch_snippet_lines, _host_url_from_deep_link, _strip_html, render_finding_snippet
+from scanner.screenshot import _fetch_snippet_lines, _host_url_from_deep_link, render_finding_snippet
 
 
 def make_finding(line: int | None = 5, component: str = "proj:hello.py", deep_link: str | None = None) -> Finding:
@@ -29,22 +29,6 @@ def make_sources_response(lines: dict[int, str]) -> MagicMock:
     response.raise_for_status = MagicMock()
     response.json.return_value = {"sources": [{"line": line, "code": code} for line, code in lines.items()]}
     return response
-
-
-# --- HTML stripping: confirmed live that SonarQube's `code` field is
-# marked up (e.g. `<span class="k">import</span>`), not plain text. ---
-
-
-def test_strip_html_removes_tags():
-    assert _strip_html('<span class="k">import</span> <span class="sym-1 sym">hashlib</span>') == "import hashlib"
-
-
-def test_strip_html_decodes_entities():
-    assert _strip_html("a &amp;&amp; b &lt; c") == "a && b < c"
-
-
-def test_strip_html_empty_string():
-    assert _strip_html("") == ""
 
 
 # --- Host resolution: reuse the finding's own deep_link, no separate plumbing ---

@@ -43,6 +43,12 @@ class Finding(BaseModel):
     deep_link: str
     source_tool: str  # e.g. "sonarqube"
     branch: str | None = None  # scan branch, stamped by fetch_findings_activity
+    # Rule-level "how to fix this" guidance (plain text, HTML stripped) -
+    # generic per rule (e.g. "use tempfile.NamedTemporaryFile instead"),
+    # never a fix tailored to this exact line/finding. None when the
+    # scanner has no such guidance for this rule, or none at all (e.g.
+    # a non-SonarQube scanner added later).
+    how_to_fix: str | None = None
 
 
 class CreatedTicket(BaseModel):

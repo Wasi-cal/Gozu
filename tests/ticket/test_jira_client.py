@@ -40,7 +40,7 @@ def make_response(status_code: int, json_body: dict | list) -> MagicMock:
 def test_build_labels_without_branch_omits_branch_label():
     client = make_client()
     labels = client._build_labels(make_finding(branch=None))
-    assert labels == ["source-sonarqube", "security", "type-vulnerability", "source-key-proj:src/app.py:1"]
+    assert labels == ["source-key-proj:src/app.py:1"]
     assert not any(label.startswith("branch-") for label in labels)
 
 
@@ -50,15 +50,11 @@ def test_build_labels_with_branch_includes_normalized_branch_label():
     assert "branch-release/2.0" in labels
 
 
-def test_build_labels_normalizes_type_with_spaces():
-    client = make_client()
-    labels = client._build_labels(make_finding(finding_type="Security Hotspot"))
-    assert "type-security-hotspot" in labels
-
-
 def test_build_description_omits_moved_fields():
     client = make_client()
-    description = client._build_description(make_finding(), component_moved=True, line_moved=True)
+    description = client._build_description(
+        make_finding(), component_moved=True, line_moved=True, severity_moved=True
+    )
     text_nodes = [
         node["text"]
         for block in description["content"]
@@ -69,7 +65,24 @@ def test_build_description_omits_moved_fields():
     ]
     assert not any(t.startswith("Component:") for t in text_nodes)
     assert not any(t.startswith("Line:") for t in text_nodes)
+    assert not any(t.startswith("Severity:") for t in text_nodes)
     assert any(t.startswith("Type:") for t in text_nodes)
+
+
+def test_build_description_includes_how_to_fix_when_present():
+    client = make_client()
+    finding = make_finding()
+    finding.how_to_fix = "Use tempfile.NamedTemporaryFile instead."
+    description = client._build_description(finding)
+    code_blocks = [block for block in description["content"] if block["type"] == "codeBlock"]
+    assert len(code_blocks) == 1
+    assert code_blocks[0]["content"][0]["text"] == "Use tempfile.NamedTemporaryFile instead."
+
+
+def test_build_description_omits_how_to_fix_when_absent():
+    client = make_client()
+    description = client._build_description(make_finding())
+    assert not any(block["type"] == "codeBlock" for block in description["content"])
 
 
 def test_build_description_never_includes_deep_link():

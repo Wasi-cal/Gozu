@@ -2,6 +2,7 @@
 # Author: Wasiullah Rafeeq S
 #
 # Depends on: scanner/base.py - resolve_container_host() for Docker container-host URL rewriting
+# Depends on: scanner/html_text.py - strip_html() for SonarQube's syntax-highlighting markup
 
 """
 Renders a syntax-highlighted PNG snippet of the source lines around a
@@ -20,7 +21,6 @@ when the finding was first fetched, never scraped from anywhere.
 """
 
 import io
-from html.parser import HTMLParser
 from urllib.parse import urlsplit
 
 import requests
@@ -30,38 +30,9 @@ from pygments.util import ClassNotFound
 
 from core.models import Finding
 from scanner.base import resolve_container_host
+from scanner.html_text import strip_html
 
 DEFAULT_CONTEXT_LINES = 5
-
-
-class _HTMLTextExtractor(HTMLParser):
-    """
-    SonarQube's /api/sources/lines returns each line's `code` field
-    pre-marked-up with ITS OWN syntax-highlighting spans (confirmed
-    live: e.g. `<span class="k">import</span> <span class="sym-1
-    sym">hashlib</span>`), not plain text - Pygments does its own
-    highlighting from scratch and needs the raw source, so this strips
-    every tag and keeps only the text content. HTMLParser's default
-    convert_charrefs=True already decodes entities (&amp; -> &, etc) in
-    the text handed to handle_data(), so no separate unescape step
-    is needed.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._parts: list[str] = []
-
-    def handle_data(self, data: str) -> None:
-        self._parts.append(data)
-
-    def text(self) -> str:
-        return "".join(self._parts)
-
-
-def _strip_html(marked_up: str) -> str:
-    extractor = _HTMLTextExtractor()
-    extractor.feed(marked_up)
-    return extractor.text()
 
 
 def _host_url_from_deep_link(deep_link: str) -> str:
@@ -96,7 +67,7 @@ def _fetch_snippet_lines(finding: Finding, token: str, context_lines: int) -> tu
     response.raise_for_status()
 
     sources = response.json().get("sources", [])
-    lines = [_strip_html(source.get("code", "")) for source in sources]
+    lines = [strip_html(source.get("code", "")) for source in sources]
     return lines, from_line
 
 

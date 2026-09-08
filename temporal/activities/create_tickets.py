@@ -13,7 +13,7 @@ from core.models import CreatedTicket, TicketResult
 from temporal.models.create_tickets import CreateTicketsInput
 from ticket import claims
 from ticket.factory import build_ticket_client, get_ticket_client
-from ticket.jira_client import CUSTOM_FIELD_COMPONENT_NAME, CUSTOM_FIELD_LINE_NAME
+from ticket.jira_client import CUSTOM_FIELD_COMPONENT_NAME, CUSTOM_FIELD_LINE_NAME, CUSTOM_FIELD_SEVERITY_NAME
 
 # Per-run cap on genuinely new tickets (Jira issue-create calls) - a named
 # constant, not a magic number, since a large one-off backlog (e.g. this
@@ -63,7 +63,9 @@ async def create_tickets_activity(input: CreateTicketsInput) -> TicketResult:
     discover_custom_fields = getattr(client, "discover_custom_fields", None)
     if discover_custom_fields:
         try:
-            custom_fields = discover_custom_fields([CUSTOM_FIELD_COMPONENT_NAME, CUSTOM_FIELD_LINE_NAME])
+            custom_fields = discover_custom_fields(
+                [CUSTOM_FIELD_COMPONENT_NAME, CUSTOM_FIELD_LINE_NAME, CUSTOM_FIELD_SEVERITY_NAME]
+            )
         except Exception as e:
             activity.logger.warning(f"Custom field discovery failed, falling back to Description for all fields: {e}")
 

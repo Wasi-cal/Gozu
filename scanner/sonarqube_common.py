@@ -3,6 +3,7 @@
 #
 # Depends on: SonarQube (SonarSource) - direct API client
 # Depends on: scanner/sonarqube_classify.py - is_security_relevant() classification of raw issues
+# Depends on: scanner/html_text.py - strip_html() for a rule's HTML-formatted description sections
 
 """
 Shared issues-fetch logic for both SonarQube backends (self-hosted Server
@@ -18,7 +19,17 @@ from temporalio import activity
 from core.errors import ScannerAuthError
 from core.models import Finding, Severity
 from scanner.base import DEFAULT_SEVERITY, SONAR_SEVERITY_MAP
+from scanner.html_text import strip_html
 from scanner.sonarqube_classify import FORMER_HOTSPOT_TAG, is_security_relevant
+
+# The descriptionSections key SonarQube uses for a rule's "how to fix"
+# guidance (confirmed live against /api/rules/show - see
+# scanner/html_text.py's Depends-on comment). Older SonarQube versions
+# return a single flat `htmlDesc` field instead of `descriptionSections`
+# at all - that case has no clean way to extract just "how to fix" out of
+# the whole rule writeup, so it's left as None rather than dumping the
+# entire htmlDesc into a ticket.
+_HOW_TO_FIX_SECTION_KEY = "how_to_fix"
 
 # SonarQube's documented max page size for issues/search.
 _PAGE_SIZE = 500
@@ -46,7 +57,7 @@ class SonarQubeIssueFetcher:
     token: str
 
     def __init__(self) -> None:
-        self._rule_name_cache: dict[str, str] = {}
+        self._rule_cache: dict[str, tuple[str, str | None]] = {}
 
     def _auth(self) -> tuple[str, str]:
         # SonarQube web API convention: token as HTTP basic auth username, empty password.
@@ -56,11 +67,17 @@ class SonarQubeIssueFetcher:
         """Extra query params every request needs - none by default, Cloud overrides for `organization`."""
         return {}
 
-    def _fetch_rule_name(self, rule_key: str) -> str:
-        if rule_key in self._rule_name_cache:
-            return self._rule_name_cache[rule_key]
+    def _fetch_rule_details(self, rule_key: str) -> tuple[str, str | None]:
+        """
+        Returns (rule name, how-to-fix guidance as plain text or None) -
+        one call per distinct rule key, cached, since the same rule fires
+        on many findings within a single fetch.
+        """
+        if rule_key in self._rule_cache:
+            return self._rule_cache[rule_key]
 
         name = rule_key
+        how_to_fix = None
         try:
             response = requests.get(
                 f"{self._request_base_url}/api/rules/show",
@@ -68,12 +85,17 @@ class SonarQubeIssueFetcher:
                 auth=self._auth(),
             )
             if response.status_code == 200:
-                name = response.json().get("rule", {}).get("name", rule_key)
+                rule = response.json().get("rule", {})
+                name = rule.get("name", rule_key)
+                for section in rule.get("descriptionSections", []):
+                    if section.get("key") == _HOW_TO_FIX_SECTION_KEY:
+                        how_to_fix = strip_html(section.get("content", ""), preserve_block_breaks=True) or None
+                        break
         except requests.RequestException:
-            pass  # fall back to the rule key rather than fail the whole fetch
+            pass  # fall back to the rule key/no guidance rather than fail the whole fetch
 
-        self._rule_name_cache[rule_key] = name
-        return name
+        self._rule_cache[rule_key] = (name, how_to_fix)
+        return name, how_to_fix
 
     def _map_severity(self, raw_severity: str | None) -> Severity:
         if raw_severity in SONAR_SEVERITY_MAP:
@@ -131,7 +153,7 @@ class SonarQubeIssueFetcher:
 
             key = raw["key"]
             rule = raw.get("rule", "")
-            rule_name = self._fetch_rule_name(rule) if rule else rule
+            rule_name, how_to_fix = self._fetch_rule_details(rule) if rule else (rule, None)
             component = raw.get("component", "")
             line = raw.get("line")
             finding_type = "hotspot" if FORMER_HOTSPOT_TAG in raw.get("tags", []) else "vulnerability"
@@ -146,6 +168,7 @@ class SonarQubeIssueFetcher:
                     finding_type=finding_type,
                     deep_link=f"{self.base_url}/project/issues?id={project_key}&issues={key}",
                     source_tool="sonarqube",
+                    how_to_fix=how_to_fix,
                 )
             )
         return findings

@@ -36,13 +36,21 @@ ROLLUP_LABEL = "gozu-backlog-rollup"
 # unreadable ticket body otherwise.
 _ROLLUP_DESCRIPTION_MAX_LINES = 50
 
-# Exact names a Jira admin must give these two OPTIONAL custom fields
-# (Short text / Number respectively - see README.md's Jira setup section)
-# for discover_custom_fields() to find them. Neither existing is the
-# default, unchanged-from-today state: Component/Line stay embedded in
-# Description text instead.
+# Exact names a Jira admin must give these OPTIONAL custom fields
+# (Short text / Number / Short text respectively - see README.md's Jira
+# setup section) for discover_custom_fields() to find them. None existing
+# is the default, unchanged-from-today state: Component/Line/Severity
+# stay embedded in Description text instead.
 CUSTOM_FIELD_COMPONENT_NAME = "SonarQube Component"
 CUSTOM_FIELD_LINE_NAME = "SonarQube Line"
+# The RAW SonarQube severity (CRITICAL/HIGH/MEDIUM/LOW/INFO) as its own
+# field, distinct from Jira's own `priority` (always set, see
+# _build_create_payload() - a translated value on Jira's own
+# Highest/High/Medium/Low/Lowest scale, via SEVERITY_TO_PRIORITY). Someone
+# who wants the untranslated SonarQube value visible as a real Details-tab
+# field (not just text in Description) creates this custom field; nothing
+# breaks if they don't.
+CUSTOM_FIELD_SEVERITY_NAME = "SonarQube Severity"
 
 
 def _normalize_label_value(value: str) -> str:
@@ -126,47 +134,69 @@ class JiraClient(TicketClient):
 
     def _build_labels(self, finding: Finding) -> list[str]:
         """
-        "source-sonarqube"/"type-{type}" identify the scanner/finding kind
-        the same way "security" already did, just structured (Source/Type/
-        Branch) instead of ad hoc - all show natively in Jira's Details
-        panel with zero project setup, unlike the custom fields below.
-        "branch-{branch}" is only added when a real branch value exists -
-        a config/scanner with no branch concept (e.g. SonarQube Cloud
-        Free, always "main" and never tagged - see
-        cli/scan_runner/scanner_exec.py's _build_scanner_command()) gets
-        no branch label at all rather than a meaningless "branch-none".
+        Deliberately minimal - "source-sonarqube"/"security"/"type-{type}"
+        used to also be added here, but every one of those already appears
+        as plain text in the description (Source/Type/Severity), so it was
+        pure duplication in the labels list rather than information found
+        only there. Two labels remain, both load-bearing:
+
+        - "source-key-{finding.key}" is NOT decorative - it's the actual
+          dedupe mechanism (find_existing() searches by this exact label,
+          since Jira has no concept of "external ID" to repurpose
+          instead). Removing this would break dedupe, not just cosmetics.
+        - "branch-{branch}" is only added when a real branch value exists
+          (a config/scanner with no branch concept - e.g. SonarQube Cloud
+          Free, always "main" and never tagged, see
+          cli/scan_runner/scanner_exec.py's _build_scanner_command() -
+          gets no branch label at all rather than a meaningless
+          "branch-none") - useful for filtering a multi-branch project's
+          tickets directly in Jira's own search/JQL.
         """
-        labels = [
-            "source-sonarqube",
-            "security",
-            f"type-{_normalize_label_value(finding.finding_type)}",
-            f"source-key-{finding.key}",
-        ]
+        labels = [f"source-key-{finding.key}"]
         if finding.branch:
             labels.append(f"branch-{_normalize_label_value(finding.branch)}")
         return labels
 
-    def _build_description(self, finding: Finding, component_moved: bool = False, line_moved: bool = False) -> dict:
+    def _build_description(
+        self,
+        finding: Finding,
+        component_moved: bool = False,
+        line_moved: bool = False,
+        severity_moved: bool = False,
+    ) -> dict:
         """
-        `component_moved`/`line_moved` are True when that value is being
-        set as a real custom field instead (see create_ticket()) - the
-        corresponding line is dropped here so it isn't shown twice.
-        deep_link is never included here at all anymore - it's a native
-        remote link now (create_ticket()'s _create_remote_link() call),
-        not embedded text.
+        `component_moved`/`line_moved`/`severity_moved` are True when that
+        value is being set as a real custom field instead (see
+        create_ticket()) - the corresponding line is dropped here so it
+        isn't shown twice. deep_link is never included here at all anymore
+        - it's a native remote link now (create_ticket()'s
+        _create_remote_link() call), not embedded text.
         """
         details = []
         if not component_moved:
             details.append(f"Component: {finding.component}")
         if not line_moved:
             details.append(f"Line: {finding.line}")
+        details.append(f"Type: {finding.finding_type}")
+        if not severity_moved:
+            details.append(f"Severity: {finding.severity.value}")
         details += [
-            f"Type: {finding.finding_type}",
-            f"Severity: {finding.severity.value}",
             f"Source: {finding.source_tool}",
             f"Branch: {finding.branch or 'unknown'}",
         ]
-        return doc(paragraph(finding.message), bullet_list(details))
+        content = [paragraph(finding.message), bullet_list(details)]
+        if finding.how_to_fix:
+            # Rule-level guidance ("fix this class of issue"), never a fix
+            # tailored to this exact line - see core/models.Finding's
+            # how_to_fix docstring. code_block() over another bullet_list -
+            # SonarQube's rule descriptions mix prose with real
+            # before/after code examples, and a monospace block is a
+            # reasonable, if imperfect, way to keep that at least legible
+            # after HTML-to-plain-text stripping (scanner/html_text.py)
+            # collapses the original formatting.
+            content.append(paragraph("How to fix:"))
+            content.append(code_block(finding.how_to_fix))
+        return doc(*content)
 
     def discover_custom_fields(self, names: list[str]) -> dict[str, str]:
         """
@@ -192,7 +222,11 @@ class JiraClient(TicketClient):
         return {field["name"]: field["id"] for field in response.json() if field.get("name") in wanted}
 
     def _build_create_payload(
-        self, finding: Finding, component_field_id: str | None, line_field_id: str | None
+        self,
+        finding: Finding,
+        component_field_id: str | None,
+        line_field_id: str | None,
+        severity_field_id: str | None = None,
     ) -> dict[str, Any]:
         line_value = finding.line if (line_field_id and finding.line is not None) else None
         fields: dict[str, Any] = {
@@ -202,13 +236,18 @@ class JiraClient(TicketClient):
             "priority": {"name": self._map_priority(finding.severity)},
             "labels": self._build_labels(finding),
             "description": self._build_description(
-                finding, component_moved=bool(component_field_id), line_moved=line_value is not None
+                finding,
+                component_moved=bool(component_field_id),
+                line_moved=line_value is not None,
+                severity_moved=bool(severity_field_id),
             ),
         }
         if component_field_id:
             fields[component_field_id] = finding.component
         if line_field_id and line_value is not None:
             fields[line_field_id] = line_value
+        if severity_field_id:
+            fields[severity_field_id] = finding.severity.value
         return {"fields": fields}
 
     def _rejected_custom_field_ids(self, response: requests.Response, candidate_ids: set[str]) -> set[str]:
@@ -248,10 +287,10 @@ class JiraClient(TicketClient):
 
         `custom_fields` (from discover_custom_fields(), called once per
         create_tickets_activity run, not per ticket) is whichever of
-        CUSTOM_FIELD_COMPONENT_NAME/CUSTOM_FIELD_LINE_NAME this Jira
-        instance actually has - per-field, not all-or-nothing: only the
-        ones present get set as real custom fields, the rest stay in
-        Description.
+        CUSTOM_FIELD_COMPONENT_NAME/CUSTOM_FIELD_LINE_NAME/
+        CUSTOM_FIELD_SEVERITY_NAME this Jira instance actually has -
+        per-field, not all-or-nothing: only the ones present get set as
+        real custom fields, the rest stay in Description.
 
         Existing in this Jira instance doesn't guarantee usable on THIS
         project's create screen - if Jira's response rejects the create
@@ -266,8 +305,9 @@ class JiraClient(TicketClient):
         custom_fields = custom_fields or {}
         component_field_id = custom_fields.get(CUSTOM_FIELD_COMPONENT_NAME)
         line_field_id = custom_fields.get(CUSTOM_FIELD_LINE_NAME)
+        severity_field_id = custom_fields.get(CUSTOM_FIELD_SEVERITY_NAME)
 
-        payload = self._build_create_payload(finding, component_field_id, line_field_id)
+        payload = self._build_create_payload(finding, component_field_id, line_field_id, severity_field_id)
         response = requests.post(
             f"{self.base_url}/rest/api/3/issue",
             json=payload,
@@ -275,8 +315,8 @@ class JiraClient(TicketClient):
             headers=self.headers,
         )
 
-        if response.status_code == 400 and (component_field_id or line_field_id):
-            candidate_ids = {fid for fid in (component_field_id, line_field_id) if fid}
+        if response.status_code == 400 and (component_field_id or line_field_id or severity_field_id):
+            candidate_ids = {fid for fid in (component_field_id, line_field_id, severity_field_id) if fid}
             rejected = self._rejected_custom_field_ids(response, candidate_ids)
             if rejected:
                 activity.logger.warning(
@@ -288,7 +328,9 @@ class JiraClient(TicketClient):
                     component_field_id = None
                 if line_field_id in rejected:
                     line_field_id = None
-                payload = self._build_create_payload(finding, component_field_id, line_field_id)
+                if severity_field_id in rejected:
+                    severity_field_id = None
+                payload = self._build_create_payload(finding, component_field_id, line_field_id, severity_field_id)
                 response = requests.post(
                     f"{self.base_url}/rest/api/3/issue",
                     json=payload,
