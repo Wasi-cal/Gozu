@@ -3,7 +3,7 @@
 
 from scanner.html_text import strip_html
 
-# --- Default mode (scanner/screenshot.py): confirmed live that SonarQube's
+# --- Default mode (src/scanner/screenshot.py): confirmed live that SonarQube's
 # /api/sources/lines `code` field is marked up (e.g.
 # `<span class="k">import</span>`), not plain text. ---
 
@@ -20,7 +20,7 @@ def test_strip_html_empty_string():
     assert strip_html("") == ""
 
 
-# --- preserve_block_breaks mode (scanner/sonarqube_common.py's rule
+# --- preserve_block_breaks mode (src/scanner/sonarqube_common.py's rule
 # descriptions): block tags become line breaks instead of running
 # straight into the next tag's text. ---
 

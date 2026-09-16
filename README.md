@@ -25,7 +25,7 @@ gozu's own database already runs in - not a second container) rather than
 its bundled embedded H2 database, which isn't recommended beyond quick
 trials. `gozu init`/`bootstrap_env.py` generates a random
 `SONARQUBE_DB_PASSWORD` alongside gozu's own Postgres credentials;
-`sql/init_sonarqube_db.sql` creates the database/role once, the first time
+`db/init_sonarqube_db.sql` creates the database/role once, the first time
 the `postgres_data` volume is initialized, and `docker-compose.yml`'s
 `sonarqube` service points at it via `SONAR_JDBC_URL`/`SONAR_JDBC_USERNAME`/
 `SONAR_JDBC_PASSWORD`. It's a genuinely separate database, not a schema in
@@ -65,7 +65,7 @@ Three ways, chosen per-config during `gozu init`:
 |---|---|---|
 | `direct` | Self-hosted SonarQube, run on demand | `gozu run` runs sonar-scanner, waits for SonarQube to finish, then creates tickets |
 | `watch` | SonarQube Cloud **Free** plan | Free only analyzes PRs after merge to main - there's no webhook to receive, so `gozu run --watch` polls on an interval instead |
-| `webhook` | Self-hosted SonarQube, or SonarQube Cloud **Premium** | SonarQube calls `receiver/app.py` as soon as its own analysis finishes; Premium can track several branches (with pattern support, e.g. `release/*`), each webhook gated against that list |
+| `webhook` | Self-hosted SonarQube, or SonarQube Cloud **Premium** | SonarQube calls `src/receiver/app.py` as soon as its own analysis finishes; Premium can track several branches (with pattern support, e.g. `release/*`), each webhook gated against that list |
 
 A Premium config tracking more than one branch fans out: `gozu run`
 starts one child workflow per branch under a parent
@@ -83,11 +83,11 @@ never needs to fan out - the branch list just gates which deliveries proceed.
   - `type-{vulnerability|hotspot}` - the finding's kind, lowercased
   - `branch-{branch}` - only added when the finding actually has a branch
     value (e.g. a multi-branch Premium config); omitted entirely for a
-    scanner/config with no branch concept, rather than a meaningless
+    src/scanner/config with no branch concept, rather than a meaningless
     `branch-none`
   - `source-key-{finding key}` - gozu's own dedupe marker, not meant to
     be human-facing
-- **Priority**, mapped from the finding's severity (`ticket/base.py`'s
+- **Priority**, mapped from the finding's severity (`src/ticket/base.py`'s
   `SEVERITY_TO_PRIORITY`: Critical/High → Highest/High, Medium → Medium,
   Low/Info → Low) - shows in the Details panel like any other Jira
   ticket's priority, no setup needed.
@@ -224,7 +224,7 @@ referenced below - that folder is gitignored, kept locally for reference
 rather than tracked, so it won't be present in a fresh clone.)
 
 ```
-cli/                    the `gozu` CLI (typer)
+src/cli/                    the `gozu` CLI (typer)
   main.py                 entrypoint: init / run / up / down
   init_wizard/             `gozu init` wizard, one file per step
   scan_runner/             `gozu run`: scan, poll, trigger workflow
@@ -232,20 +232,20 @@ cli/                    the `gozu` CLI (typer)
   help_links.py            credential help-link lookup
   stack/                   `gozu up`/`down` (+ `--wipe`), Compose profile detection
 
-config/                 saved scanner+ticket credential sets ("configs")
+src/config/                 saved scanner+ticket credential sets ("configs")
   store.py                 CRUD against Postgres
   connection.py            shared get_connection() (store.py + ticket_destinations.py)
   ticket_destinations.py   shared ticket boards multiple configs can reference
   crypto.py                Fernet encryption for stored secrets
 
-scanner/                scanner backends
+src/scanner/                scanner backends
   base.py                  ScannerClient interface + shared constants
   sonarqube_server.py       self-hosted SonarQube
   sonarqube_cloud.py        SonarQube Cloud (stub)
   factory.py                build_scanner_client() / get_scanner_client()
   screenshot.py            Pygments: renders a syntax-highlighted source snippet PNG
 
-ticket/                 ticket backends
+src/ticket/                 ticket backends
   base.py                  TicketClient interface
   jira_client.py            Jira implementation (incl. transitions, rollup ticket)
   jira_sprint.py            active-sprint lookup/assignment
@@ -253,36 +253,36 @@ ticket/                 ticket backends
   adf.py                   Atlassian Document Format builders
   factory.py                build_ticket_client() / get_ticket_client()
 
-temporal/               Temporal workflows/activities/models
+src/temporal/               Temporal workflows/activities/models
   worker.py                worker process entrypoint
   workflows/               ScanToTicketWorkflow, MultiBranchScanWorkflow
   activities/               fetch findings, create tickets, reconcile resolved findings, screenshot
   models/                  per-activity Pydantic input models
 
-receiver/               Flask webhook receiver
+src/receiver/               Flask webhook receiver
   app.py                   routes, signature + branch gating
   verify_signature.py      HMAC verification
   starter.py               starts a workflow on behalf of a webhook
 
-core/models.py          shared domain models (Finding, TicketResult, ...)
-scripts/                 one-off/bootstrap scripts (env setup, seeding)
-config/migrations.py     Alembic migration runner (config/migrations.py)
-alembic.ini, migrations/ Alembic config + revisions (see docs/ARCHITECTURE.md)
-sql/init_sonarqube_db.sql  local-mode SonarQube's own database/role, unrelated to the above
+src/core/models.py          shared domain models (Finding, TicketResult, ...)
+src/scripts/                 one-off/bootstrap scripts (env setup, seeding)
+src/config/migrations.py     Alembic migration runner (src/config/migrations.py)
+alembic.ini, db/migrations/ Alembic config + revisions (see docs/ARCHITECTURE.md)
+db/init_sonarqube_db.sql  local-mode SonarQube's own database/role, unrelated to the above
 ```
 
 ## Adding a new scanner or ticket backend
 
-Both scanner/ and ticket/ follow the same shape: an abstract base class
-(`scanner/base.py`'s `ScannerClient`, `ticket/base.py`'s `TicketClient`),
+Both src/scanner/ and src/ticket/ follow the same shape: an abstract base class
+(`src/scanner/base.py`'s `ScannerClient`, `src/ticket/base.py`'s `TicketClient`),
 one implementation module per backend, and a `factory.py` with a pure
 `build_*_client()` (explicit params, no env reads) plus a thin
 `get_*_client()` env-reading wrapper used by the webhook receiver.
 
 To add a backend:
-1. Write a new class implementing the interface (see `scanner/sonarqube_server.py` or `ticket/jira_client.py` for the shape).
+1. Write a new class implementing the interface (see `src/scanner/sonarqube_server.py` or `src/ticket/jira_client.py` for the shape).
 2. Register it in that package's `factory.py`.
-3. If it's a scanner, add it to `scanner/base.py`'s `SCANNER_REGISTRY` so the init wizard can offer it.
+3. If it's a scanner, add it to `src/scanner/base.py`'s `SCANNER_REGISTRY` so the init wizard can offer it.
 
 Nothing else in the codebase needs to change - workflows, activities, and
 the receiver only ever talk to the abstract interface.
@@ -292,9 +292,9 @@ the receiver only ever talk to the abstract interface.
 A **config** (never called a "profile" - Docker Compose already has an
 unrelated `profiles` concept) is a named set of scanner + ticket
 credentials, stored in Postgres (schema created/evolved by
-`config/migrations.py` - see docs/ARCHITECTURE.md's "Database schema &
-migrations") via `config/store.py`.
-Every secret value is Fernet-encrypted (`config/crypto.py`) before it
+`src/config/migrations.py` - see docs/ARCHITECTURE.md's "Database schema &
+migrations") via `src/config/store.py`.
+Every secret value is Fernet-encrypted (`src/config/crypto.py`) before it
 touches the database; `FERNET_KEY` lives only in `.env`, never committed.
 
 `gozu init` creates configs; `gozu run --config <name>` uses one;
@@ -309,7 +309,7 @@ doesn't care which when it actually creates tickets:
 - **Embedded** (every config created before this feature existed): the
   config's own `config_credentials` rows carry its Jira URL/email/API
   token/project key directly - the original shape, still fully supported.
-- **A shared ticket destination** (`config/ticket_destinations.py`, new
+- **A shared ticket destination** (`src/config/ticket_destinations.py`, new
   configs by default): the config just stores a `ticket_destination_id`
   pointing at one `ticket_destinations` row, and any number of other
   configs can point at that same row instead of each embedding their own
@@ -321,7 +321,7 @@ step, if a destination already exists you'll see "Use an existing ticket
 destination, or create a new one?" instead of being asked for a Jira
 URL/email/token again. Pick the existing one and there's nothing further
 to collect for it. Both configs' tickets land on the same board, and
-dedupe (`ticket/claims.py`) still holds correctly across them, since it
+dedupe (`src/ticket/claims.py`) still holds correctly across them, since it
 keys off the destination itself, not which config triggered the scan.
 
 Creating a brand-new destination is deferred until you actually save on
@@ -358,7 +358,7 @@ the webhook secret, and the Jira fields are offered - scanner
 type/mode, `sonar_plan`, and `trigger_mode` were decided once at `gozu
 init` time and can't be changed here. If nothing was actually changed,
 it says so and makes no writes at all; otherwise each changed field is
-written individually (`config/store.py`'s `update_config_fields()` for
+written individually (`src/config/store.py`'s `update_config_fields()` for
 `project_key`/`branches`, `update_config_credential()` for everything
 else), with the shared-destination warning above surfacing first when it
 applies.
@@ -381,7 +381,7 @@ uv run --with pyright pyright .   # types
 
 Conventions (see `CLAUDE.md` for the full list): Pydantic `BaseModel` for
 every data model, `workflow.logger`/`activity.logger` inside Temporal code
-(plain `logging` only in `receiver/app.py` and `temporal/worker.py`), and
+(plain `logging` only in `src/receiver/app.py` and `src/temporal/worker.py`), and
 questionary for every interactive prompt in the wizard.
 
 ## Docker Compose profiles
@@ -393,7 +393,7 @@ based on your configs:
 - `webhook` - the Flask receiver, for any config in `webhook` trigger mode
 
 `gozu down` and `gozu up` determine which of `sonarqube-local`/`webhook`
-are active the exact same way (`cli/stack/profiles.py`'s
+are active the exact same way (`src/cli/stack/profiles.py`'s
 `active_profiles()`), so `down` correctly stops whichever of those got
 started - not just the always-on services.
 
@@ -408,7 +408,7 @@ all: local-mode SonarQube now runs on its own separate `sonarqube`
 database in the same Postgres instance (see the Quickstart section
 above), and `--wipe` only ever resets the one database it actually owns
 (`DROP DATABASE`/`CREATE DATABASE` against gozu's own database, then
-every Alembic revision re-applied via `config/migrations.py`'s
+every Alembic revision re-applied via `src/config/migrations.py`'s
 `run_migrations()` - the same call `gozu up` makes on a fresh install,
 not a separate mechanism) - SonarQube's database is completely untouched
 by this, not merely deprioritized. Before doing
@@ -425,5 +425,5 @@ database entirely, so it's never part of this dump) is written to
 `~/.gozu/backups/wipe-<timestamp>.sql` before anything is actually reset -
 the printed path is real, not aspirational. Backups older than 7 days are
 pruned the next time a wipe runs
-(`cli/stack/backup.py`'s `_RETENTION_DAYS`) - there's no separate
+(`src/cli/stack/backup.py`'s `_RETENTION_DAYS`) - there's no separate
 scheduled cleanup job.

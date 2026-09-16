@@ -42,24 +42,32 @@ dev = ["pytest", "pytest-asyncio"]
 default-groups = ["dev"]
 
 [tool.hatch.build.targets.wheel]
-# An allowlist, not an exclude list - anything not matching one of these
-# patterns (tests/, CLAUDE.md, dev/, ARCHITECTURE.md, ...) is structurally
-# never in the wheel, with nothing to remember to keep excluded as the repo
-# grows. scripts/** is included wholesale because every file actually left
-# in scripts/ (bootstrap_env.py/env_ports.py/fernet_safety.py/paths.py) is
-# genuinely runtime-needed - a throwaway/dev-only script (e.g. what used to
-# be scripts/seed_test_config.py) belongs under dev/ instead, specifically
-# because dev/ matches none of these patterns; don't add one back into
-# scripts/ just because it's Python and lives near real code.
-include = [
-    "core/**",
-    "scanner/**",
-    "ticket/**",
-    "temporal/**",
-    "receiver/**",
-    "cli/**",
-    "scripts/**",
-    "config/**",
-    "github_action/**",
-    "llm/**",
+# Source layout: every real Python package lives under src/. Only the
+# packages listed below are shipped - src/dev/ (dev-only scripts) and
+# everything outside src/ (tests/, CLAUDE.md, db/, docs/, ARCHITECTURE.md,
+# ...) is structurally never in the wheel. `packages` (not `include`) is what
+# strips the leading `src/` so each entry lands as a top-level importable
+# package in the wheel/site-packages - `cli`, `scanner`, etc, not
+# `src.cli`/`src.scanner` - so every absolute import in this codebase
+# (`from cli.main import app`, `from scanner.factory import ...`, the
+# `[project.scripts]` entry points above) resolves unchanged regardless of
+# whether gozu is run from this repo checkout (editable install) or
+# installed from a built wheel. src/scripts/** is included wholesale
+# because every file actually left in src/scripts/
+# (bootstrap_env.py/env_ports.py/fernet_safety.py/paths.py) is genuinely
+# runtime-needed - a throwaway/dev-only script (e.g. what used to be
+# src/scripts/seed_test_config.py) belongs under src/dev/ instead, specifically
+# because src/dev/ isn't in this list; don't add one back into
+# src/scripts/ just because it's Python and lives near real code.
+packages = [
+    "src/core",
+    "src/scanner",
+    "src/ticket",
+    "src/temporal",
+    "src/receiver",
+    "src/cli",
+    "src/scripts",
+    "src/config",
+    "src/github_action",
+    "src/llm",
 ]

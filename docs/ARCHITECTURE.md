@@ -33,37 +33,37 @@ SonarQube (Docker, self-hosted Community Build or Cloud)
    |  either `gozu run` triggers a scan directly, or SonarQube's own
    |  webhook fires when analysis finishes (HMAC-SHA256 signed)
    v
-cli/scan_runner/ (direct)  OR  receiver/app.py (webhook, Flask, :5000)
+src/cli/scan_runner/ (direct)  OR  src/receiver/app.py (webhook, Flask, :5000)
    |  webhook path: verify_signature.py checks the HMAC signature,
    |  starter.py connects to Temporal and starts ScanToTicketWorkflow
    v
 Temporal server (:7233)
    v
-temporal/worker.py -> temporal/workflows/scan_to_ticket.py (ScanToTicketWorkflow)
+src/temporal/worker.py -> src/temporal/workflows/scan_to_ticket.py (ScanToTicketWorkflow)
    |
-   |--1--> temporal/activities/fetch_findings.py
-   |         -> scanner/factory.py's get_scanner_client()/build_scanner_client()
-   |            picks a concrete ScannerClient (scanner/sonarqube_server.py or
-   |            scanner/sonarqube_cloud.py)
+   |--1--> src/temporal/activities/fetch_findings.py
+   |         -> src/scanner/factory.py's get_scanner_client()/build_scanner_client()
+   |            picks a concrete ScannerClient (src/scanner/sonarqube_server.py or
+   |            src/scanner/sonarqube_cloud.py)
    |         -> hits SonarQube's REST API, classifies vulnerability vs hotspot
-   |            (scanner/sonarqube_classify.py)
+   |            (src/scanner/sonarqube_classify.py)
    |
-   |--2--> temporal/activities/create_tickets.py
-   |         -> ticket/factory.py's build_ticket_client()/get_ticket_client()
-   |            picks a concrete TicketClient (ticket/jira_client.py)
+   |--2--> src/temporal/activities/create_tickets.py
+   |         -> src/ticket/factory.py's build_ticket_client()/get_ticket_client()
+   |            picks a concrete TicketClient (src/ticket/jira_client.py)
    |         -> find_existing (dedupe) -> create_ticket
    |         -> new tickets get moved into the active sprint, if one exists
    |
-   |--3--> temporal/activities/reconcile_resolved_findings.py
+   |--3--> src/temporal/activities/reconcile_resolved_findings.py
    |         -> closes tickets whose finding SonarQube now reports resolved,
    |            or whose ticket was deleted externally in Jira
    |
    |--4--> (fanned out concurrently, once per ticket just created in step 2)
-             temporal/activities/capture_and_attach_screenshot.py
-               -> scanner/screenshot.py: Pygments renders a syntax-highlighted
+             src/temporal/activities/capture_and_attach_screenshot.py
+               -> src/scanner/screenshot.py: Pygments renders a syntax-highlighted
                   PNG of the source lines around the flagged line (SonarQube's
                   /api/sources/lines + a local Pygments render, no browser)
-               -> ticket/jira_client.py: attach_screenshot (idempotent) + add_comment
+               -> src/ticket/jira_client.py: attach_screenshot (idempotent) + add_comment
 ```
 
 Activities 1 and 2 run sequentially with the SDK's default retry policy
@@ -82,13 +82,13 @@ activity makes.
 1. Someone runs `sonar-scanner` against this repo (or any project pointed
    at this SonarQube instance) — either directly via `gozu run`, or by
    SonarQube itself firing a webhook once its own scan finishes.
-   Analysis finishes; SonarQube POSTs a webhook to `receiver/app.py`,
+   Analysis finishes; SonarQube POSTs a webhook to `src/receiver/app.py`,
    signing the body with `SONAR_WEBHOOK_SECRET`.
 2. `verify_signature.py` recomputes the HMAC and compares it
    (`hmac.compare_digest`, timing-safe) against the
    `X-Sonar-Webhook-HMAC-SHA256` header. A mismatch or missing header
    returns `401` and stops there.
-3. `receiver/starter.py` connects to the Temporal server and starts
+3. `src/receiver/starter.py` connects to the Temporal server and starts
    `ScanToTicketWorkflow` with the project key and the webhook's `taskId`
    (used to build a deterministic workflow ID: `sonar-jira-{task_id}`, so
    re-delivering the same webhook doesn't start a duplicate workflow
@@ -97,13 +97,13 @@ activity makes.
    a single receiver serves multiple saved configs (see [Managing saved
    configs](README.md#managing-saved-configs) in the README).
 4. The workflow's first activity, `fetch_findings_activity`, asks
-   `scanner/factory.py`'s `get_scanner_client()` (or, when the workflow
+   `src/scanner/factory.py`'s `get_scanner_client()` (or, when the workflow
    was started with explicit per-config credentials, `build_scanner_client()`
    directly) for a `ScannerClient` — `SonarQubeServerClient` or
    `SonarQubeCloudClient` depending on scanner mode — whose
    `fetch_findings()` hits `/api/issues/search` once (`issueStatuses=OPEN,CONFIRMED`)
    and classifies each result as a vulnerability or a former security
-   hotspot by inspecting its tags (`scanner/sonarqube_classify.py`'s
+   hotspot by inspecting its tags (`src/scanner/sonarqube_classify.py`'s
    `FORMER_HOTSPOT_TAG`) rather than calling a separate hotspots
    endpoint. `branch` comes from the caller (the CLI's local git checkout,
    or the webhook payload) when supplied; only if nothing supplied one
@@ -114,7 +114,7 @@ activity makes.
    branch is read from local git](#why-branch-is-read-from-local-git)
    below).
 5. The second activity, `create_tickets_activity`, loops over every
-   finding. Dedupe is two-layered: `ticket/claims.py`'s Postgres ledger
+   finding. Dedupe is two-layered: `src/ticket/claims.py`'s Postgres ledger
    atomically claims a `(destination, finding_key)` pair before anything
    talks to Jira (closing races between overlapping runs), and
    `find_existing` — a JQL search for a ticket labeled
@@ -122,7 +122,7 @@ activity makes.
    the ledger. A per-run ticket cap (`--ticket-cap`/`-t` for one
    invocation, or a persistent per-config default set via `gozu config
    edit`; `BACKLOG_CAP = 30` if neither is set — see
-   `migrations/versions/0008_add_ticket_cap.py`) limits how many *new*
+   `db/migrations/versions/0008_add_ticket_cap.py`) limits how many *new*
    tickets one run creates; anything past the cap is left unclaimed and
    rolled into one backlog rollup ticket instead of being created
    individually. For each finding that does get a new ticket,
@@ -153,7 +153,7 @@ activity makes.
      independent of the snippet render below, not scraped from anywhere.
    - Fetches the source lines around `finding.line` from SonarQube's
      `/api/sources/lines` and renders them as a syntax-highlighted PNG via
-     Pygments (`scanner/screenshot.py`'s `render_finding_snippet()` - see
+     Pygments (`src/scanner/screenshot.py`'s `render_finding_snippet()` - see
      the deep dive below), then attaches it (`attach_screenshot`, skipping
      if a same-named file is already there).
    - A snippet-rendering failure is caught INSIDE the activity, logged
@@ -175,7 +175,7 @@ activity makes.
 `ScanToTicketWorkflow` above is the core, single-branch pipeline every
 scan ultimately runs — but three other paths exist around it:
 
-- **`MultiBranchScanWorkflow`** (`temporal/workflows/multi_branch_scan.py`)
+- **`MultiBranchScanWorkflow`** (`src/temporal/workflows/multi_branch_scan.py`)
   — used when a config's direct/CLI-triggered scan tracks more than one
   branch (Premium only; see [Why branch is read from local
   git](#why-branch-is-read-from-local-git)). Fans out one child
@@ -188,10 +188,10 @@ scan ultimately runs — but three other paths exist around it:
   the parent's own summary just doesn't surface a combined deferred
   count). A webhook delivery never needs this fan-out at all, since
   SonarQube already delivers one webhook per branch on its own.
-- **`ReconcileOnlyWorkflow`** (`temporal/workflows/reconcile_only.py`) —
+- **`ReconcileOnlyWorkflow`** (`src/temporal/workflows/reconcile_only.py`) —
   runs *only* `reconcile_resolved_findings_activity`, with no
   fetch/create pipeline around it at all. This is what `gozu run
-  --skip-unchanged` triggers (via `cli/scan_runner/workflow_trigger.py`'s
+  --skip-unchanged` triggers (via `src/cli/scan_runner/workflow_trigger.py`'s
   `trigger_reconcile_only()`) when the scan path is a git repo whose HEAD
   SHA and clean/dirty working-tree state exactly match this config's last
   successful run (persisted in Postgres — `config["last_scan_sha"]`/
@@ -206,7 +206,7 @@ scan ultimately runs — but three other paths exist around it:
   prior recorded state, always scans normally, exactly as if
   `--skip-unchanged` were never passed.
 - **The standalone GitHub Action** (`.github/workflows/sonar-to-jira-main.yml`
-  + `github_action/main.py`) — an entirely separate pipeline with no
+  + `src/github_action/main.py`) — an entirely separate pipeline with no
   Temporal, no Postgres, and no gozu config store involved at all. It
   triggers on `push: branches: [main]` and reacts to SonarQube Cloud's own
   **Automatic Analysis** completing on `main` (SonarCloud's Free-plan
@@ -229,7 +229,7 @@ scan ultimately runs — but three other paths exist around it:
   false}`). Screenshot/comment posting mirrors
   `capture_and_attach_screenshot_activity`'s body without any Temporal
   context (plain `logging`, the same exception `CLAUDE.md` already
-  carves out for `receiver/app.py`/`temporal/worker.py`).
+  carves out for `src/receiver/app.py`/`src/temporal/worker.py`).
   `wait_for_latest_analysis(project_key, branch, not_before, timeout=300,
   poll_interval=5)` polls `api/project_analyses/search` (there's no
   `ceTaskId` to poll for a scan this process didn't trigger itself) until
@@ -251,7 +251,7 @@ scan ultimately runs — but three other paths exist around it:
 
 ## Component reference
 
-### `receiver/` — the webhook entrypoint
+### `src/receiver/` — the webhook entrypoint
 
 - **`app.py`** — `GET /health` (for `docker-compose.yml`'s healthcheck)
   and `POST /webhooks/sonarqube/<config_name>`, the actual webhook route.
@@ -269,7 +269,7 @@ scan ultimately runs — but three other paths exist around it:
   doesn't need to know about Temporal's `Client`/`data_converter`
   plumbing directly.
 
-### `temporal/` — orchestration
+### `src/temporal/` — orchestration
 
 - **`data_converter.py`** — one constant (`TASK_QUEUE`) and one object
   (`pydantic_data_converter`) shared by the worker, the workflow starter,
@@ -314,18 +314,18 @@ scan ultimately runs — but three other paths exist around it:
   single `@activity.defn async def` function with no shared state
   between them beyond what's passed as arguments.
 
-### `core/models.py` and the scanner/ticket seam
+### `src/core/models.py` and the src/scanner/ticket seam
 
 Unlike the pre-refactor version of this codebase (a direct SonarQube ->
 Jira pipeline), the current system is generic over which scanner and
 which ticketing system sit behind it:
 
-- **`core/models.py`** — `Finding` and `Severity` are the normalized
-  vocabulary every adapter translates into/out of. Neither `scanner/`
-  nor `ticket/` ever sees the other's tool-specific values (SonarQube's
+- **`src/core/models.py`** — `Finding` and `Severity` are the normalized
+  vocabulary every adapter translates into/out of. Neither `src/scanner/`
+  nor `src/ticket/` ever sees the other's tool-specific values (SonarQube's
   `BLOCKER`/`MAJOR`, Jira's issue keys) outside its own adapter. See
   [Data model reference](#data-model-reference) for every field.
-- **`scanner/base.py`** — `ScannerClient` is an `ABC` with three
+- **`src/scanner/base.py`** — `ScannerClient` is an `ABC` with three
   abstract methods: `fetch_findings(project_key, branch=None) -> list[Finding]`
   (combining vulnerabilities and hotspots into one list is an internal
   detail of each adapter, not part of the generic contract),
@@ -333,26 +333,26 @@ which ticketing system sit behind it:
   binaries this scanner needs, read by the CLI wizard to decide what to
   bring up), and `fetch_resolutions(finding_keys) -> dict[str, str]`
   (batch resolution-status check used by
-  `temporal/activities/reconcile_resolved_findings.py` to auto-close
-  tickets). `scanner/factory.py`'s `get_scanner_client()`/
+  `src/temporal/activities/reconcile_resolved_findings.py` to auto-close
+  tickets). `src/scanner/factory.py`'s `get_scanner_client()`/
   `build_scanner_client()` is the single place that picks a concrete
   class from a scanner type + mode.
-  - `SonarQubeServerClient` (`scanner/sonarqube_server.py`) — talks to
+  - `SonarQubeServerClient` (`src/scanner/sonarqube_server.py`) — talks to
     self-hosted SonarQube. Auth is HTTP Basic with the token as username
     and an empty password (`(token, "")`), which is SonarQube's
     documented convention for using a personal access token in place of
     a username/password pair on its REST API.
-  - `SonarQubeCloudClient` (`scanner/sonarqube_cloud.py`) — talks to
+  - `SonarQubeCloudClient` (`src/scanner/sonarqube_cloud.py`) — talks to
     SonarQube Cloud (`sonarcloud.io`), scoped by an `organization` param
     required on most of its endpoints. Also the only concrete client
     implementing `wait_for_latest_analysis()`, used exclusively by the
     standalone GitHub Action (see above) — a bonus capability, not part
     of the generic `ScannerClient` contract. Both concrete clients share
     their issue-fetching/classification logic via `SonarQubeIssueFetcher`
-    (`scanner/sonarqube_common.py`), so the fetch/classify behavior
+    (`src/scanner/sonarqube_common.py`), so the fetch/classify behavior
     described in [Walking through one request](#walking-through-one-request)
     applies to either one identically.
-- **`scanner/screenshot.py`** — see the deep dive below. Not part of the
+- **`src/scanner/screenshot.py`** — see the deep dive below. Not part of the
   `ScannerClient` contract — it's a SonarQube-specific bonus capability
   (source-lines API, `SONAR_TOKEN` auth), called directly by the
   screenshot activity rather than through `get_scanner_client()`.
@@ -440,16 +440,16 @@ scanned if they ever diverge (e.g. someone switches branches on the
 worker's machine between a scan finishing and the workflow's activity
 running).
 
-### `ticket/jira_client.py` — the Jira Cloud integration
+### `src/ticket/jira_client.py` — the Jira Cloud integration
 
-- **`TicketClient`** (`ticket/base.py`) is an `ABC` with three required
+- **`TicketClient`** (`src/ticket/base.py`) is an `ABC` with three required
   methods (`destination_id`, `find_existing`, `create_ticket`) — the
   seam between "some ticketing product" and everything upstream;
-  nothing outside `ticket/jira_client.py` should ever construct
-  `JiraClient` directly. `ticket/factory.py`'s `get_ticket_client()`/
+  nothing outside `src/ticket/jira_client.py` should ever construct
+  `JiraClient` directly. `src/ticket/factory.py`'s `get_ticket_client()`/
   `build_ticket_client()` is the single place that picks a concrete
   class. `destination_id()` returns a stable string (e.g.
-  `jira:{base_url}:{project_key}`) that scopes `ticket/claims.py`'s
+  `jira:{base_url}:{project_key}`) that scopes `src/ticket/claims.py`'s
   idempotency ledger, so two different destinations tracking the same
   finding key never collide.
 - **`JiraClient`** — the only concrete implementation today. Every
@@ -459,7 +459,7 @@ running).
   hierarchy anywhere in this codebase).
   - `find_existing` / `create_ticket` — required `TicketClient` methods;
     `find_existing`'s label-based JQL search is the fallback dedupe
-    layer behind `ticket/claims.py`'s Postgres ledger (see [Walking
+    layer behind `src/ticket/claims.py`'s Postgres ledger (see [Walking
     through one request](#walking-through-one-request)). Dedupe is a
     Jira **label** (`source-key-{finding.key}`), not a custom field,
     specifically so it works on a brand-new free-tier project with zero
@@ -518,7 +518,7 @@ running).
 ### Auto-closing resolved findings
 
 `reconcile_resolved_findings_activity`
-(`temporal/activities/reconcile_resolved_findings.py`), driven by
+(`src/temporal/activities/reconcile_resolved_findings.py`), driven by
 `ReconcileResolvedFindingsInput` (deliberately carrying no
 `project_key`/`branch` — the `ticket_claims` ledger is already scoped
 per-destination, and resolution-checking looks up specific finding keys
@@ -529,7 +529,7 @@ entrypoints](#alternate-entrypoints-multi-branch-skip-unchanged-and-the-github-a
 above) — never on its own schedule/cron. All inside one shared Postgres
 connection:
 
-1. `ticket/claims.py`'s `list_open()` — every currently-tracked,
+1. `src/ticket/claims.py`'s `list_open()` — every currently-tracked,
    still-open ticket for this destination. Empty → return immediately.
 2. If the ticket backend supports `ticket_exists()`, check *every* open
    claim's existence up front — independent of whether SonarQube has
@@ -555,7 +555,7 @@ connection:
    already-deleted ticket) can never sink reconciliation of every other
    claim in the same run.
 
-`ticket/claims.py`'s ledger backs all of this with one shared Postgres
+`src/ticket/claims.py`'s ledger backs all of this with one shared Postgres
 connection per activity invocation (every function takes an explicit
 `conn` as its first argument, replacing what used to be a fresh
 connection per call) and an `open`/`closed` status column
@@ -603,20 +603,20 @@ Every model in this codebase is a Pydantic `BaseModel` — there are no
 
 | Model | File | Fields | Crosses a Temporal boundary? |
 |---|---|---|---|
-| `Finding` | `core/models.py` | `key`, `title`, `severity`, `component`, `line`, `message`, `finding_type`, `deep_link`, `source_tool`, `branch` | Yes — activity input/output |
-| `CreatedTicket` | `core/models.py` | `finding_key`, `ticket_key` | Yes — nested in `TicketResult` |
-| `TicketResult` | `core/models.py` | `created: list[CreatedTicket]`, `skipped: list[str]`, `deferred: list[str]` (backlog-cap overflow), `rollup_ticket: str \| None`, `closed: list[str]` (auto-closed this run) | Yes — every activity/workflow that touches tickets returns or aggregates this |
-| `SonarToJiraInput` | `temporal/models/sonar_to_jira.py` | `project_key`, `task_id` | Yes — the workflow's input |
-| `CreateTicketsInput` | `temporal/models/create_tickets.py` | `findings`, `ticket_backend`, `credentials`, `ticket_cap: int \| None` | Yes — `create_tickets_activity`'s input |
-| `ReconcileResolvedFindingsInput` | `temporal/models/reconcile_resolved_findings.py` | `scanner_type`, `scanner_mode`, `ticket_backend`, `credentials` (deliberately no `project_key`/`branch`) | Yes — both `reconcile_resolved_findings_activity`'s input and `ReconcileOnlyWorkflow`'s own input |
-| `ScreenshotAttachInput` | `temporal/models/screenshot_attach.py` | `finding: Finding`, `ticket_key` | Yes — `capture_and_attach_screenshot_activity`'s input |
+| `Finding` | `src/core/models.py` | `key`, `title`, `severity`, `component`, `line`, `message`, `finding_type`, `deep_link`, `source_tool`, `branch` | Yes — activity input/output |
+| `CreatedTicket` | `src/core/models.py` | `finding_key`, `ticket_key` | Yes — nested in `TicketResult` |
+| `TicketResult` | `src/core/models.py` | `created: list[CreatedTicket]`, `skipped: list[str]`, `deferred: list[str]` (backlog-cap overflow), `rollup_ticket: str \| None`, `closed: list[str]` (auto-closed this run) | Yes — every activity/workflow that touches tickets returns or aggregates this |
+| `SonarToJiraInput` | `src/temporal/models/sonar_to_jira.py` | `project_key`, `task_id` | Yes — the workflow's input |
+| `CreateTicketsInput` | `src/temporal/models/create_tickets.py` | `findings`, `ticket_backend`, `credentials`, `ticket_cap: int \| None` | Yes — `create_tickets_activity`'s input |
+| `ReconcileResolvedFindingsInput` | `src/temporal/models/reconcile_resolved_findings.py` | `scanner_type`, `scanner_mode`, `ticket_backend`, `credentials` (deliberately no `project_key`/`branch`) | Yes — both `reconcile_resolved_findings_activity`'s input and `ReconcileOnlyWorkflow`'s own input |
+| `ScreenshotAttachInput` | `src/temporal/models/screenshot_attach.py` | `finding: Finding`, `ticket_key` | Yes — `capture_and_attach_screenshot_activity`'s input |
 
 ## Database schema & migrations
 
 gozu's own Postgres schema (`configs`, `config_credentials`,
 `ticket_destinations`, `ticket_destination_credentials`, `ticket_claims`)
 is created and evolved by [Alembic](https://alembic.sqlalchemy.org/),
-via `config/migrations.py`'s `run_migrations()` (Alembic's own Python
+via `src/config/migrations.py`'s `run_migrations()` (Alembic's own Python
 API - `alembic.command.upgrade(cfg, "head")` - not a subprocess
 shell-out to the `alembic` CLI). This replaced an earlier two-path setup
 where `sql/init.sql` ran once via Postgres's own
@@ -636,20 +636,20 @@ up` does — a config command touching a schema that's behind head is
 exactly the kind of subtle failure worth catching upfront rather than
 partway through a write.
 
-Revisions live under `migrations/versions/` (named
+Revisions live under `db/migrations/versions/` (named
 `NNNN_description.py`, chained via each file's `down_revision`), NOT
 `alembic/versions/` - a directory literally named `alembic` at that
 nesting depth was confirmed live to be silently dropped in its entirety
 from a real `uv build --wheel`, almost certainly a name collision with
 the installed `alembic` PyPI package during hatchling's own file
 resolution; `alembic.ini`'s `script_location` (and
-`config/migrations.py`'s override of it) points at `migrations`
+`src/config/migrations.py`'s override of it) points at `migrations`
 accordingly. Every revision is pure `op.execute(<real DDL>)` -
-`target_metadata = None` in `migrations/env.py`, since there's no
+`target_metadata = None` in `db/migrations/env.py`, since there's no
 ORM/SQLAlchemy model layer anywhere in this codebase to diff against.
 Scope is deliberately narrow: **Alembic manages schema evolution only** -
-`config/store.py`, `config/ticket_destinations.py`, and
-`ticket/claims.py` all keep talking to Postgres via raw `psycopg`
+`src/config/store.py`, `src/config/ticket_destinations.py`, and
+`src/ticket/claims.py` all keep talking to Postgres via raw `psycopg`
 exactly as they already did; SQLAlchemy is present solely because
 Alembic depends on it to drive a migration's own DB connection.
 
@@ -668,7 +668,7 @@ Current revisions, in order: `0001_initial_schema` (the `configs`/
 
 **To make a future schema change:** `alembic revision -m "description"`
 (from the repo root - reads `alembic.ini`, writes a new file under
-`migrations/versions/`), then hand-write its `upgrade()`/`downgrade()`
+`db/migrations/versions/`), then hand-write its `upgrade()`/`downgrade()`
 with real `op.execute()` DDL - nothing else. The next `gozu up` or
 `gozu down --wipe` picks it up automatically.
 
@@ -679,7 +679,7 @@ capability an Alembic-based approach adds over a hand-rolled
 apply-only runner, confirmed live against a fully-migrated database as
 part of building this.
 
-`sql/init_sonarqube_db.sql` (creating the separate `sonarqube`
+`db/init_sonarqube_db.sql` (creating the separate `sonarqube`
 database/role local-mode SonarQube's own Postgres backend uses, in the
 same instance) is deliberately NOT part of this migration history - it's
 a single idempotent "ensure this exists" step with no evolving schema of
@@ -747,7 +747,7 @@ need `@pytest.mark.asyncio` on each one.
 
 Every saved config's credentials live encrypted in Postgres (see
 `README.md`'s "Managing saved configs" section and
-`config/store.py`/`config/crypto.py`) — this is the normal path for
+`src/config/store.py`/`src/config/crypto.py`) — this is the normal path for
 anything created via `gozu init`. A smaller set of environment variables
 still exists as a legacy fallback for contexts with no per-config
 credentials of their own (the webhook receiver's oldest code path, and
@@ -757,13 +757,13 @@ secrets instead):
 
 | Variable | Read by | Purpose |
 |---|---|---|
-| `SONAR_WEBHOOK_SECRET` | `receiver/app.py` | HMAC key for verifying incoming webhooks |
-| `SCANNER_TYPE` | `scanner/factory.py` | `sonarqube` or `sonarqube-cloud` — picks the `ScannerClient` implementation (falls back to the legacy `SONAR_MODE` var if unset) |
-| `SONAR_HOST_URL` | `scanner/factory.py` | Base URL of the SonarQube instance |
-| `SONAR_TOKEN` | `scanner/factory.py`, `scanner/screenshot.py` | User token; used as the REST API's Basic-auth username for both the main issues-search calls and `render_finding_snippet()`'s `/api/sources/lines` call |
-| `SONAR_ORGANIZATION` | `scanner/factory.py` | Required when `SCANNER_TYPE=sonarqube-cloud` — passed to `SonarQubeCloudClient`, which needs it on most SonarQube Cloud API calls |
-| `TICKET_BACKEND` | `ticket/factory.py` | `jira` — picks the `TicketClient` implementation |
-| `JIRA_URL` / `JIRA_EMAIL` / `JIRA_API_TOKEN` / `JIRA_PROJECT_KEY` | `ticket/factory.py` | Jira Cloud site, account, API token, and target project |
+| `SONAR_WEBHOOK_SECRET` | `src/receiver/app.py` | HMAC key for verifying incoming webhooks |
+| `SCANNER_TYPE` | `src/scanner/factory.py` | `sonarqube` or `sonarqube-cloud` — picks the `ScannerClient` implementation (falls back to the legacy `SONAR_MODE` var if unset) |
+| `SONAR_HOST_URL` | `src/scanner/factory.py` | Base URL of the SonarQube instance |
+| `SONAR_TOKEN` | `src/scanner/factory.py`, `src/scanner/screenshot.py` | User token; used as the REST API's Basic-auth username for both the main issues-search calls and `render_finding_snippet()`'s `/api/sources/lines` call |
+| `SONAR_ORGANIZATION` | `src/scanner/factory.py` | Required when `SCANNER_TYPE=sonarqube-cloud` — passed to `SonarQubeCloudClient`, which needs it on most SonarQube Cloud API calls |
+| `TICKET_BACKEND` | `src/ticket/factory.py` | `jira` — picks the `TicketClient` implementation |
+| `JIRA_URL` / `JIRA_EMAIL` / `JIRA_API_TOKEN` / `JIRA_PROJECT_KEY` | `src/ticket/factory.py` | Jira Cloud site, account, API token, and target project |
 
 ## Known limitations
 

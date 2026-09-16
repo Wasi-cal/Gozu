@@ -44,7 +44,7 @@ def make_client(create_ticket_side_effect=None):
 
 def patched_claims():
     """
-    Fakes the whole ticket/claims.py module used by create_tickets_activity -
+    Fakes the whole src/ticket/claims.py module used by create_tickets_activity -
     a real connection would need real Postgres, and this activity's own
     claim-ledger semantics aren't what these tests are about.
     """

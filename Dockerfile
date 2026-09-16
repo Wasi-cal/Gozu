@@ -6,7 +6,7 @@ FROM ghcr.io/astral-sh/uv:latest AS uv
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/app/src
 ENV UV_PROJECT_ENVIRONMENT=/usr/local
 ENV UV_LINK_MODE=copy
 
@@ -14,7 +14,7 @@ WORKDIR /app
 
 COPY --from=uv /uv /uvx /usr/local/bin/
 
-# scanner/screenshot.py's render_finding_snippet() needs Pygments'
+# src/scanner/screenshot.py's render_finding_snippet() needs Pygments'
 # ImageFormatter to find an actual monospace font - confirmed live that
 # python:3.12-slim has neither fontconfig (`fc-list`) nor any font at
 # all, which makes ImageFormatter raise FileNotFoundError outright, not

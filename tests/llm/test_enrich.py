@@ -48,7 +48,7 @@ def test_generate_explanation_includes_rule_message_and_snippet_in_prompt():
 
 
 def test_generate_explanation_without_snippet_uses_generic_unavailable_note():
-    """A missing snippet isn't automatically a credential concern - see llm/enrich.py's two distinct notes."""
+    """A missing snippet isn't automatically a credential concern - see src/llm/enrich.py's two distinct notes."""
     client = make_client()
     generate_explanation(client, make_finding(), None)
 

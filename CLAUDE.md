@@ -16,7 +16,7 @@ actually running a scan) is open to work on.
 
 ## CLI conventions (Phase 2+)
 
-- The `cli/` package holds everything CLI-specific: `main.py` (the typer
+- The `src/cli/` package holds everything CLI-specific: `main.py` (the typer
   app), `init_wizard/`, `scan_runner/`, `prerequisites/` (each a small
   package, one file per step/concern - see their own docstrings), plus
   `help_links.py` and `stack.py`.
@@ -31,14 +31,14 @@ actually running a scan) is open to work on.
   against the same `pyproject.toml`/`uv.lock`, not a separate
   requirements file - keep it that way rather than hand-maintaining two
   dependency lists.
-- A credential/doc-link helper (`cli/help_links.py`'s `HELP_LINKS`) must
+- A credential/doc-link helper (`src/cli/help_links.py`'s `HELP_LINKS`) must
   use real, current URLs looked up live (WebSearch or equivalent) - never
   a plausible-looking guessed URL.
 
 ## Naming: "configs", not "profiles"
 
 A saved, named set of scanner + ticket-backend credentials (see
-`migrations/versions/0001_initial_schema.py`'s `configs` table, `config/store.py`) is called a **config**,
+`db/migrations/versions/0001_initial_schema.py`'s `configs` table, `src/config/store.py`) is called a **config**,
 never a "profile". Docker Compose already has an unrelated built-in concept
 called profiles (`docker-compose.yml`'s `profiles: [...]` on the
 `sonarqube` service, for conditionally starting services) - reusing "profile"
@@ -52,7 +52,7 @@ Use **Pydantic `BaseModel`** for every data model in this project - never
 Temporal workflow/activity boundary (`Finding`, `CreatedTicket`,
 `TicketResult`, `SonarToJiraInput`, `ScreenshotAttachInput`) and any new
 ones added later (e.g. `ScannerRequirements`, `FindingExtraction`). The
-Pydantic-aware data converter (`temporal/data_converter.py`) serializes
+Pydantic-aware data converter (`src/temporal/data_converter.py`) serializes
 `BaseModel`s across that boundary automatically - a plain dataclass or
 dict does not, and needs manual conversion, which is exactly what we
 removed by standardizing on Pydantic.
@@ -62,11 +62,11 @@ removed by standardizing on Pydantic.
 Use **exactly one** logging mechanism inside the Temporal-executed pipeline:
 
 - `workflow.logger` (from `temporalio.workflow`) inside workflow code
-  (`temporal/workflows/`).
+  (`src/temporal/workflows/`).
 - `activity.logger` (from `temporalio.activity`) everywhere else that runs
   inside an activity - the activity functions themselves
-  (`temporal/activities/`) and every module they call into
-  (`scanner/`, `ticket/`).
+  (`src/temporal/activities/`) and every module they call into
+  (`src/scanner/`, `src/ticket/`).
 
 Both are Temporal's contextual loggers - they tag every line with
 workflow/activity id, run id, attempt number, etc, and route to the same
@@ -75,8 +75,8 @@ place `workflow.logger`/`activity.logger` already do. Don't create a plain
 activity or workflow.
 
 The only exception is the two process entrypoints, which run before any
-Temporal workflow/activity context exists: `receiver/app.py` (Flask, before
-a workflow is started) and `temporal/worker.py` (bootstrap, before
+Temporal workflow/activity context exists: `src/receiver/app.py` (Flask, before
+a workflow is started) and `src/temporal/worker.py` (bootstrap, before
 `worker.run()`). Those use plain `logging.basicConfig`/`logging.getLogger`
 because there's nothing to attach Temporal context to yet.
 
@@ -91,20 +91,20 @@ wait for a third copy. Concretely, follow the patterns already in this
 codebase rather than inventing new ones:
 
 - **Pure-builder + env-reading-wrapper split**, for anything that can be
-  configured either explicitly or from the environment: `scanner/factory.py`'s
+  configured either explicitly or from the environment: `src/scanner/factory.py`'s
   `build_scanner_client(scanner_type, scanner_mode, credentials)` (no env
   reads) vs `get_scanner_client()` (reads env vars, delegates to the
-  builder); `ticket/factory.py`'s `build_ticket_client()`/`get_ticket_client()`
+  builder); `src/ticket/factory.py`'s `build_ticket_client()`/`get_ticket_client()`
   mirror it. When adding a new backend or a new per-config code path, add
   to the pure builder and let the env-reading wrapper stay a thin
   translation layer - don't duplicate the branching in both.
 - **Extract shared download/verify logic**, not per-tool copies: see
-  `cli/prerequisites/archive.py`'s `download_archive()`/`extract_archive()`/
+  `src/cli/prerequisites/archive.py`'s `download_archive()`/`extract_archive()`/
   `make_tree_executable()`/`verify_runnable()`, shared by `java.py`'s
   `ensure_java()` and `sonar_scanner.py`'s `ensure_sonar_scanner()`. A third
   `ensure_*()` for a new host dependency should reuse these, not reimplement
   its own download loop. Same idea for small derived values used in more
-  than one place - e.g. `cli/scan_runner/config_fields.py`'s
+  than one place - e.g. `src/cli/scan_runner/config_fields.py`'s
   `scanner_host_url(config)`, computed once and reused rather than
   recomputed per call site.
 - **Dedicated, narrow Pydantic models per activity boundary** (interface
@@ -165,7 +165,7 @@ line), before everything else - including a module docstring - otherwise.
 - **In-house dependency line(s)** (same block, one line per dependency):
   a file with a genuine load-bearing dependency on another module
   *within this repo* also gets its own "Depends on: <repo-relative file
-  path> - what for" line - e.g. "Depends on: config/store.py - reads/
+  path> - what for" line - e.g. "Depends on: src/config/store.py - reads/
   writes the configs table". Repo-relative file path, not an import
   statement or module dotted-path. Same bar as the vendor line above:
   only the specific module(s) a file is actually built on top of to do

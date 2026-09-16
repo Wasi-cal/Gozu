@@ -4,7 +4,7 @@
 # Pinned explicitly - otherwise docker compose derives the project name
 # (and so every container/volume/network name) from the compose file's
 # parent directory name, which for a pip install is ~/.gozu/stack/ (see
-# cli/stack/files.py), not a checkout dir named after this repo.
+# src/cli/stack/files.py), not a checkout dir named after this repo.
 name: gozu
 
 services:
@@ -16,7 +16,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-      # Only read by sql/init_sonarqube_db.sql below, at first-init time -
+      # Only read by db/init_sonarqube_db.sql below, at first-init time -
       # not gozu's own database, see the sonarqube service's SONAR_JDBC_*
       # vars.
       SONARQUBE_DB_PASSWORD: ${SONARQUBE_DB_PASSWORD}
@@ -28,16 +28,16 @@ services:
       # created via this docker-entrypoint-initdb.d hook at all - that
       # only ever fires once, on a genuinely fresh volume, which is
       # exactly why --wipe used to need a separate hand-rolled re-run of
-      # the same file. config/migrations.py's run_migrations() (Alembic,
+      # the same file. src/config/migrations.py's run_migrations() (Alembic,
       # called by `gozu up` and `gozu down --wipe`) is now the single,
-      # explicit, authoritative path for both cases - see migrations/.
+      # explicit, authoritative path for both cases - see db/migrations/.
       #
       # This SonarQube-database bootstrap stays on the old hook-based
       # approach, deliberately: it's a single idempotent "ensure this
       # database/role exists" step with no evolving schema of its own
       # (SonarQube manages its own schema internally once pointed at an
       # empty database) - not part of gozu's own migration history.
-      - ./sql/init_sonarqube_db.sql:/docker-entrypoint-initdb.d/init_sonarqube_db.sql:ro
+      - ./db/init_sonarqube_db.sql:/docker-entrypoint-initdb.d/init_sonarqube_db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -68,7 +68,7 @@ services:
     # recommended beyond quick trials - this points it at a real Postgres
     # database instead, in the SAME instance/container gozu's own database
     # already runs in (not a second container), via a genuinely separate
-    # database + role (sql/init_sonarqube_db.sql) rather than a schema in
+    # database + role (db/init_sonarqube_db.sql) rather than a schema in
     # gozu's own - container-to-container on the same Compose network, so
     # no host.docker.internal indirection is needed here.
     environment:
@@ -98,7 +98,7 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
-    # Lets scanner/client.py's resolve_container_host() reach a host-side
+    # Lets src/scanner/client.py's resolve_container_host() reach a host-side
     # "local" SonarQube (config.sonar_host_url=http://localhost:PORT) via
     # host.docker.internal - built into Docker Desktop (macOS/Windows)
     # already; this entry is what makes the same hostname resolve on Linux.
