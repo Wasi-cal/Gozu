@@ -15,8 +15,6 @@ from datetime import timedelta
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from temporal.models.sonar_to_jira import SonarToJiraInput
-
 with workflow.unsafe.imports_passed_through():
     from core.models import TicketResult
     from temporal.activities.capture_and_attach_screenshot import (
@@ -31,6 +29,19 @@ with workflow.unsafe.imports_passed_through():
     from temporal.models.fetch_findings import FetchFindingsInput
     from temporal.models.reconcile_resolved_findings import ReconcileResolvedFindingsInput
     from temporal.models.screenshot_attach import ScreenshotAttachInput
+    # Confirmed live: this one MUST be passed-through too, not just the
+    # activity input models above - it has a Finding-typed field
+    # (pre_fetched_findings) since Trivy support was added. Imported
+    # outside this block, the workflow sandbox re-executes core.models
+    # fresh in isolation, producing a SECOND, distinct Finding class from
+    # the one CreateTicketsInput (also passed-through) expects - same
+    # name and fields, different class identity, which pydantic's
+    # isinstance-based validation correctly rejects with "Input should be
+    # a valid dictionary or instance of Finding" even though the value
+    # visually looks like exactly that. Never surfaced before
+    # pre_fetched_findings existed - nothing of type Finding used to flow
+    # from this model into an activity input model at all.
+    from temporal.models.sonar_to_jira import SonarToJiraInput
 
 
 @workflow.defn
@@ -41,26 +52,38 @@ class ScanToTicketWorkflow:
             f"Starting ScanToTicketWorkflow for project_key={input.project_key} task_id={input.task_id}"
         )
 
-        findings = await workflow.execute_activity(
-            fetch_findings_activity,
-            FetchFindingsInput(
-                project_key=input.project_key,
-                scanner_type=input.scanner_type,
-                scanner_mode=input.scanner_mode,
-                credentials=input.credentials,
-                branch=input.branch,
-                display_branch=input.display_branch,
-            ),
-            start_to_close_timeout=timedelta(seconds=30),
-            # SonarQube's search index can lag behind a task's SUCCESS status,
-            # so a real 404 and "not indexed yet" look identical - extra
-            # attempts/backoff give indexing time to catch up.
-            retry_policy=RetryPolicy(
-                initial_interval=timedelta(seconds=2),
-                maximum_attempts=8,
-                non_retryable_error_types=["ScannerAuthError"],
-            ),
-        )
+        if input.pre_fetched_findings is not None:
+            # Trivy (or any future scanner whose scan is fundamentally a
+            # local-filesystem operation, not a remote API call) already
+            # ran host-side, before this workflow was even triggered - see
+            # SonarToJiraInput.pre_fetched_findings's own docstring. No
+            # activity call for this case - nothing left to fetch.
+            findings = input.pre_fetched_findings
+            workflow.logger.info(
+                f"Using {len(findings)} pre-fetched finding(s) for project_key={input.project_key} "
+                "(host-side scan, no fetch_findings_activity call)"
+            )
+        else:
+            findings = await workflow.execute_activity(
+                fetch_findings_activity,
+                FetchFindingsInput(
+                    project_key=input.project_key,
+                    scanner_type=input.scanner_type,
+                    scanner_mode=input.scanner_mode,
+                    credentials=input.credentials,
+                    branch=input.branch,
+                    display_branch=input.display_branch,
+                ),
+                start_to_close_timeout=timedelta(seconds=30),
+                # SonarQube's search index can lag behind a task's SUCCESS status,
+                # so a real 404 and "not indexed yet" look identical - extra
+                # attempts/backoff give indexing time to catch up.
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=2),
+                    maximum_attempts=8,
+                    non_retryable_error_types=["ScannerAuthError"],
+                ),
+            )
 
         workflow.logger.info(
             f"Fetched {len(findings)} findings for project_key={input.project_key}"
@@ -131,6 +154,23 @@ class ScanToTicketWorkflow:
         if ticket_result.created:
             findings_by_key = {finding.key: finding for finding in findings}
 
+            # Package-level findings (Trivy: no file+line at all - see
+            # Finding.package_name's docstring) skip this activity
+            # entirely, not just tolerate its failure. Confirmed live:
+            # both of what this activity does are pointless for one -
+            # add_comment() would just repeat finding.message, already
+            # the first paragraph of the ticket's own description, and
+            # render_finding_snippet() structurally can never succeed
+            # (there is no file/line to fetch source lines for, and
+            # finding.deep_link points at the CVE's own advisory page,
+            # not a SonarQube host with a /api/sources/lines endpoint at
+            # all) - every single Trivy-sourced ticket wasted a real
+            # capture_and_attach_screenshot_activity dispatch (plus
+            # retries) 404ing against that URL before this filter existed.
+            screenshottable_created = [
+                entry for entry in ticket_result.created if findings_by_key[entry.finding_key].package_name is None
+            ]
+
             screenshot_results = await asyncio.gather(
                 *[
                     workflow.execute_activity(
@@ -151,12 +191,12 @@ class ScanToTicketWorkflow:
                             non_retryable_error_types=["TicketAuthError", "TicketValidationError"],
                         ),
                     )
-                    for entry in ticket_result.created
+                    for entry in screenshottable_created
                 ],
                 return_exceptions=True,
             )
 
-            for entry, result in zip(ticket_result.created, screenshot_results):
+            for entry, result in zip(screenshottable_created, screenshot_results):
                 if isinstance(result, BaseException):
                     workflow.logger.warning(
                         f"Screenshot capture/attach failed for {entry.ticket_key} "

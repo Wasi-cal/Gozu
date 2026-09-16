@@ -17,7 +17,7 @@ import uuid
 from temporalio.client import Client
 
 from cli.scan_runner.config_fields import config_branches
-from core.models import TicketResult
+from core.models import Finding, TicketResult
 from temporal.data_converter import DATA_CONVERTER, TASK_QUEUE
 from temporal.models.reconcile_resolved_findings import ReconcileResolvedFindingsInput
 from temporal.models.sonar_to_jira import SonarToJiraInput
@@ -28,10 +28,11 @@ from temporal.workflows.scan_to_ticket import ScanToTicketWorkflow
 
 async def trigger_workflow(
     config: dict,
-    ce_task_id: str,
+    ce_task_id: str | None,
     branch: str | None,
     display_branch: str | None,
     ticket_cap: int | None = None,
+    pre_fetched_findings: list[Finding] | None = None,
 ) -> TicketResult:
     """
     Connects to the *host*-visible Temporal address (localhost:{TEMPORAL_PORT})
@@ -47,12 +48,25 @@ async def trigger_workflow(
 
     workflow_id is deterministic per SonarQube analysis (ceTaskId is unique
     per actual compute-engine task), the same idempotency pattern the old
-    webhook receiver used with (project_key, webhook task_id).
+    webhook receiver used with (project_key, webhook task_id). `ce_task_id`
+    is None for a scanner with no such concept at all (Trivy - a host-side
+    subprocess call, never a tracked async server-side task) - a random
+    id is used instead for that case, the same "no natural idempotency key
+    available" fallback trigger_reconcile_only() below already uses.
+
+    `pre_fetched_findings` (Trivy) skips fetch_findings_activity inside the
+    workflow entirely - see SonarToJiraInput.pre_fetched_findings's own
+    docstring for why (the worker container can't access the scanned path
+    itself) and the retry-boundary trade-off that implies.
 
     A multi-branch config (more than one entry in `branches`) starts
     MultiBranchScanWorkflow instead of a single ScanToTicketWorkflow - the
     trivial single-branch case (Free, or a single-branch Premium config)
-    isn't wrapped in unnecessary fan-out.
+    isn't wrapped in unnecessary fan-out. Trivy configs never populate
+    `branches` at all (no branch concept - see
+    SonarToJiraInput.branch's docstring), so this always takes the
+    single-workflow path for Trivy, with no Trivy-specific check needed
+    here.
     """
     temporal_port = os.environ.get("TEMPORAL_PORT", "7233")
     client = await Client.connect(f"localhost:{temporal_port}", data_converter=DATA_CONVERTER)
@@ -67,8 +81,9 @@ async def trigger_workflow(
         branch=branch,
         display_branch=display_branch,
         ticket_cap=ticket_cap,
+        pre_fetched_findings=pre_fetched_findings,
     )
-    workflow_id = f"sonar-jira-{ce_task_id}"
+    workflow_id = f"sonar-jira-{ce_task_id or uuid.uuid4().hex}"
 
     branches = config_branches(config)
     if len(branches) > 1:

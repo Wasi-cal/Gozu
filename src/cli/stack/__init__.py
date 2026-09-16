@@ -5,6 +5,7 @@
 # Depends on: src/config/migrations.py - applying schema migrations on `gozu up`/`down`
 # Depends on: src/cli/config_lookup.py - resolving a config name typed by the user
 # Depends on: src/scripts/env_ports.py - reading each service's resolved host port for `gozu ports`
+# Depends on: src/cli/stack/files.py - ensure_stack_files() refreshes STACK_DIR's source tree before `gozu up`
 
 """
 `gozu up`/`gozu down` - bringing the local Docker Compose infrastructure
@@ -20,7 +21,7 @@ import typer
 import config.store as config_store
 from cli.config_lookup import resolve_config_or_prompt
 from cli.stack.cleanup import InterruptCleanup
-from cli.stack.files import require_initialized
+from cli.stack.files import ensure_stack_files, require_initialized
 from cli.stack.profiles import (
     ALL_PROFILES,
     active_profiles,
@@ -74,6 +75,13 @@ def up(config: str | None = None) -> None:
     """
     require_initialized()
 
+    # Refreshes STACK_DIR's materialized source tree before every `gozu
+    # up` - previously only ran during `gozu init`, so a code change since
+    # then had no effect on an already-existing stack until someone
+    # happened to re-run init. Idempotent; --build below is what actually
+    # turns a refreshed source tree into a rebuilt image.
+    ensure_stack_files()
+
     with InterruptCleanup(STACK_DIR) as cleanup:
         # Tracked BEFORE calling ensure_postgres_up(), not after - an
         # interrupt while still blocked on postgres's healthcheck would
@@ -109,7 +117,10 @@ def up(config: str | None = None) -> None:
 
         ensure_webhook_secrets(configs)
 
-        command = ["docker", "compose", *profile_flags(profiles), "up", "-d"]
+        # --build: STACK_DIR's source tree was just refreshed above - a
+        # no-op for services with no `build:` key (postgres/temporal/
+        # sonarqube), cheap when worker/receiver's image is unchanged.
+        command = ["docker", "compose", *profile_flags(profiles), "up", "-d", "--build"]
         waiting("Running: " + " ".join(command))
         result = cleanup.run(command, cwd=STACK_DIR)
         if result.returncode != 0:

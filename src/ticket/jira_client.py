@@ -117,11 +117,17 @@ class JiraClient(TicketClient):
         return summary
 
     def _build_labels(self, finding: Finding) -> list[str]:
-        """Two load-bearing labels: "source-key-{finding.key}" is the actual
+        """Load-bearing labels: "source-key-{finding.key}" is the actual
         dedupe mechanism (find_existing() searches by it - Jira has no
-        external-ID concept), and "branch-{branch}" is added only when a
-        real branch exists, for filtering via Jira's own JQL."""
-        labels = [f"source-key-{finding.key}"]
+        external-ID concept). "source-{source_tool}" is dynamic, not a
+        hardcoded string - with two scanners feeding the same project now,
+        it's what makes "which scanner produced this ticket" filterable in
+        Jira's own JQL. "branch-{branch}" is added only when a real branch
+        exists."""
+        labels = [
+            f"source-{_normalize_label_value(finding.source_tool)}",
+            f"source-key-{finding.key}",
+        ]
         if finding.branch:
             labels.append(f"branch-{_normalize_label_value(finding.branch)}")
         return labels
@@ -135,11 +141,20 @@ class JiraClient(TicketClient):
     ) -> dict:
         """`*_moved` is True when that value is set as a real custom field
         instead, so it's dropped here to avoid showing it twice. deep_link
-        is a native remote link now (create_ticket()), never embedded text."""
+        is a native remote link now (create_ticket()), never embedded text.
+
+        Branches on `finding.package_name`, never `finding.source_tool` -
+        a package-level finding (Trivy: no file+line, just package/
+        installed-version/fixed-version) gets those bullets instead of
+        Line, keeping this scanner-agnostic per ticket/base.py's contract."""
         details = []
         if not component_moved:
             details.append(f"Component: {finding.component}")
-        if not line_moved:
+        if finding.package_name:
+            details.append(f"Package: {finding.package_name}")
+            details.append(f"Installed version: {finding.installed_version}")
+            details.append(f"Fixed version: {finding.fixed_version or 'not yet available'}")
+        elif not line_moved:
             details.append(f"Line: {finding.line}")
         details.append(f"Type: {finding.finding_type}")
         if not severity_moved:

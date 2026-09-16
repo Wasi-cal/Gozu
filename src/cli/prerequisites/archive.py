@@ -8,6 +8,7 @@ java.py, sonar_scanner.py) - a future ensure_*() for a new host dependency
 should reuse these, not reimplement its own download loop.
 """
 
+import hashlib
 import platform
 import subprocess
 import tarfile
@@ -79,3 +80,27 @@ def verify_runnable(binary: Path, *version_args: str, env: dict[str, str] | None
     result = subprocess.run([str(binary), *version_args], capture_output=True, text=True, check=False, env=env)
     if result.returncode != 0:
         raise RuntimeError(f"Downloaded binary at {binary} failed to run: {result.stderr}")
+
+
+def verify_checksum(archive_path: Path, expected_sha256: str) -> None:
+    """
+    Raise if `archive_path`'s SHA256 doesn't match `expected_sha256` -
+    added for cli/prerequisites/trivy.py specifically (a security-scanning
+    tool warrants not skipping this), not backfilled onto Java/
+    sonar-scanner's existing downloads (neither currently verifies a
+    checksum at all) - that's a separate, deliberate follow-up, not bundled
+    into whatever change first needed this function to exist.
+
+    Called BEFORE extract_archive() - a corrupted or tampered archive
+    should never even be unpacked, let alone have its binary run.
+    """
+    digest = hashlib.sha256()
+    with archive_path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    actual = digest.hexdigest()
+    if actual.lower() != expected_sha256.lower():
+        raise RuntimeError(
+            f"Checksum mismatch for {archive_path}: expected {expected_sha256}, got {actual} - "
+            "refusing to use a download that doesn't match its published checksum."
+        )

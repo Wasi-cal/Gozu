@@ -54,6 +54,14 @@ class Finding(BaseModel):
     # LLM-generated explanation + suggested fix for a new Blocker/Critical/
     # High ticket only. None means not generated - falls back to finding.message.
     llm_explanation: str | None = None
+    # Package-level metadata (src/scanner/trivy_client.py) - a package-level
+    # finding has no file+line. All three set together or not at all;
+    # fixed_version is None specifically when no fix is available yet, a
+    # distinct state from "unknown" (see ticket/jira_client.py, which
+    # branches on `if finding.package_name:`, never on `source_tool`).
+    package_name: str | None = None
+    installed_version: str | None = None
+    fixed_version: str | None = None
 
 
 class CreatedTicket(BaseModel):
