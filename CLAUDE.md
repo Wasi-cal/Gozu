@@ -7,8 +7,12 @@ name is decided, not a placeholder - use it consistently: the command is
 `gozu`, host-side dirs like `~/.gozu/`). The repo/working directory stays
 `sonar-to-jira` for now - don't rename it without checking first, since
 that's a separate decision from the product's own name.
-It lets users scan code with SonarQube and auto-create Jira tickets for
-vulnerabilities, orchestrated with Temporal. The build is happening in
+It's scanner- and ticket-backend-agnostic by design: users scan code with
+a pluggable choice of scanners (currently SonarQube) and get tickets
+auto-created in a pluggable choice of ticket-tracking backends (currently
+Jira), orchestrated with Temporal. SonarQube/Jira are the first concrete
+implementations, not the definition of the tool - don't write new
+docs/help text that implies gozu is confined to either. The build is happening in
 phases (Phase 1: Docker Compose infra + encrypted config store. Phase 2:
 `gozu init`, the setup wizard - see README.md for both); check with
 the user before assuming a later phase's scope (e.g. `gozu run`,

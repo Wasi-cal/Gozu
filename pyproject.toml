@@ -9,7 +9,7 @@ build-backend = "hatchling.build"
 [project]
 name = "gozu"
 version = "0.3.6"
-description = "Scan code with SonarQube and auto-create Jira tickets for vulnerabilities, orchestrated with Temporal."
+description = "Scan code with a pluggable choice of scanners (currently SonarQube) and auto-create tickets in a pluggable choice of ticket-tracking backends (currently Jira), orchestrated with Temporal."
 requires-python = ">=3.12"
 dependencies = [
     "flask",

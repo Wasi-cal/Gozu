@@ -1,9 +1,12 @@
 # How this project works
 
-This document explains the internals of the Sonar-to-Jira pipeline: what
-happens end-to-end when a scan finishes, why each piece is built the way
-it is, and the non-obvious decisions (and bugs found along the way) baked
-into the current code. For setup/installation steps, see `README.md` —
+This document explains the internals of gozu's scan-to-ticket pipeline:
+what happens end-to-end when a scan finishes, why each piece is built the
+way it is, and the non-obvious decisions (and bugs found along the way)
+baked into the current code. gozu's scanner and ticket-backend interfaces
+are pluggable by design (`ScannerClient`/`TicketClient`); SonarQube and
+Jira are the currently implemented backends, so the walkthrough below is
+written in terms of them. For setup/installation steps, see `README.md` —
 this document assumes the system is already running and focuses on how
 it behaves.
 

@@ -1,8 +1,13 @@
 # gozu
 
-Scans your code with SonarQube and automatically creates Jira tickets for
+Scans your code with a pluggable choice of scanners and automatically
+creates tickets in a pluggable choice of ticket-tracking backends for the
 vulnerabilities/hotspots it finds - orchestrated with [Temporal](https://temporal.io)
-so scans, dedupe, and ticket creation survive crashes/retries.
+so scans, dedupe, and ticket creation survive crashes/retries. SonarQube
+(scanner) and Jira (ticket backend) are the currently supported
+implementations - the rest of this doc describes gozu in terms of those,
+since they're what's actually implemented today, not a limit on the
+architecture.
 
 Working name for the CLI/product; the repo directory is still called
 `sonar-to-jira`.
