@@ -25,7 +25,7 @@ from scripts.bootstrap_env import load_into_environ
 app = typer.Typer(
     name="gozu",
     help=(
-        "gozu scans your code with a pluggable choice of scanners (currently SonarQube) and "
+        "gozu scans your code with a pluggable choice of scanners (currently SonarQube and Trivy) and "
         "automatically creates tickets in a pluggable choice of ticket-tracking backends "
         "(currently Jira) for the vulnerabilities it finds, orchestrated with Temporal so "
         "scans, dedupe, and ticket creation survive crashes and retries. Run `gozu init` "

@@ -8,9 +8,9 @@ name is decided, not a placeholder - use it consistently: the command is
 `sonar-to-jira` for now - don't rename it without checking first, since
 that's a separate decision from the product's own name.
 It's scanner- and ticket-backend-agnostic by design: users scan code with
-a pluggable choice of scanners (currently SonarQube) and get tickets
-auto-created in a pluggable choice of ticket-tracking backends (currently
-Jira), orchestrated with Temporal. SonarQube/Jira are the first concrete
+a pluggable choice of scanners (currently SonarQube and Trivy) and get
+tickets auto-created in a pluggable choice of ticket-tracking backends
+(currently Jira), orchestrated with Temporal. These are the first concrete
 implementations, not the definition of the tool - don't write new
 docs/help text that implies gozu is confined to either. The build is happening in
 phases (Phase 1: Docker Compose infra + encrypted config store. Phase 2:
