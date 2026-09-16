@@ -35,30 +35,18 @@ gozu-github-action = "github_action.main:main"
 dev = ["pytest", "pytest-asyncio"]
 
 [tool.uv]
-# `uv sync` (bare) still installs `dev` locally, same as before this split -
-# only a Docker build (which passes --no-group dev explicitly, see
-# Dockerfile) skips it. pytest has no reason to be in a shipped
-# worker/receiver image at all - it was never imported by any of them.
+# `uv sync` (bare) still installs `dev` locally; a Docker build passes
+# --no-group dev explicitly (see Dockerfile) since pytest has no reason
+# to be in a shipped worker/receiver image.
 default-groups = ["dev"]
 
 [tool.hatch.build.targets.wheel]
-# Source layout: every real Python package lives under src/. Only the
-# packages listed below are shipped - src/dev/ (dev-only scripts) and
-# everything outside src/ (tests/, CLAUDE.md, db/, docs/, ARCHITECTURE.md,
-# ...) is structurally never in the wheel. `packages` (not `include`) is what
-# strips the leading `src/` so each entry lands as a top-level importable
-# package in the wheel/site-packages - `cli`, `scanner`, etc, not
-# `src.cli`/`src.scanner` - so every absolute import in this codebase
-# (`from cli.main import app`, `from scanner.factory import ...`, the
-# `[project.scripts]` entry points above) resolves unchanged regardless of
-# whether gozu is run from this repo checkout (editable install) or
-# installed from a built wheel. src/scripts/** is included wholesale
-# because every file actually left in src/scripts/
-# (bootstrap_env.py/env_ports.py/fernet_safety.py/paths.py) is genuinely
-# runtime-needed - a throwaway/dev-only script (e.g. what used to be
-# src/scripts/seed_test_config.py) belongs under src/dev/ instead, specifically
-# because src/dev/ isn't in this list; don't add one back into
-# src/scripts/ just because it's Python and lives near real code.
+# Every real Python package lives under src/. `packages` (not `include`)
+# strips the leading `src/` so each lands as a top-level importable
+# package - `cli`, `scanner`, etc, not `src.cli` - so every absolute
+# import in this codebase resolves unchanged whether gozu runs from a
+# checkout or a built wheel. src/dev/ (dev-only scripts) and everything
+# outside src/ stay out of the wheel entirely.
 packages = [
     "src/core",
     "src/scanner",

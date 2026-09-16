@@ -52,18 +52,9 @@ class ScanToTicketWorkflow:
                 display_branch=input.display_branch,
             ),
             start_to_close_timeout=timedelta(seconds=30),
-            # SonarQube's issues/hotspots search index can lag a few seconds
-            # behind a compute-engine task's own SUCCESS status - a project
-            # genuinely not existing (a permanent error, what
-            # maximum_attempts is mainly guarding against - see
-            # create_tickets_activity below) looks identical over the API to
-            # "not indexed yet" (both 404 "Project not found"). More
-            # attempts + a longer initial backoff than the default gives
-            # that indexing lag room to resolve before giving up for real -
-            # unchanged by non_retryable_error_types below, which only ever
-            # stops retrying a ScannerAuthError (an invalid/expired token -
-            # genuinely permanent, no amount of waiting fixes it), never a
-            # 404 - that stays on the retryable path exactly as before.
+            # SonarQube's search index can lag behind a task's SUCCESS status,
+            # so a real 404 and "not indexed yet" look identical - extra
+            # attempts/backoff give indexing time to catch up.
             retry_policy=RetryPolicy(
                 initial_interval=timedelta(seconds=2),
                 maximum_attempts=8,
@@ -89,11 +80,7 @@ class ScanToTicketWorkflow:
                 ticket_cap=input.ticket_cap,
             ),
             start_to_close_timeout=timedelta(seconds=30),
-            # TicketAuthError (invalid/expired Jira token) and
-            # TicketValidationError (a permanently malformed request - bad
-            # project key, invalid issue type/field) never get fixed by
-            # retrying; everything else (404s, 429s, 5xxs, timeouts) stays
-            # on the normal retryable path, unchanged.
+            # Auth/validation errors are permanent, not worth retrying.
             retry_policy=RetryPolicy(
                 maximum_attempts=3,
                 non_retryable_error_types=["TicketAuthError", "TicketValidationError"],
@@ -110,12 +97,9 @@ class ScanToTicketWorkflow:
         for finding_key in ticket_result.skipped:
             workflow.logger.info(f"  skipped finding {finding_key} (ticket already exists)")
 
-        # Alongside/after ticket creation, same run - not a separate
-        # trigger, and always on for every config. Never allowed to fail
-        # this workflow: closing tickets automatically is a bonus on top
-        # of the create pipeline above, which already succeeded by this
-        # point, same "don't let a bonus feature undo real work" rule as
-        # jira_client.py's sprint assignment and rollup-ticket upsert.
+        # Best-effort bonus on top of the create pipeline above - never
+        # allowed to fail this workflow, same as jira_client.py's sprint
+        # assignment and rollup-ticket upsert.
         closed_tickets: list[str] = []
         try:
             closed_tickets = await workflow.execute_activity(
@@ -127,18 +111,8 @@ class ScanToTicketWorkflow:
                     credentials=input.credentials,
                 ),
                 start_to_close_timeout=timedelta(seconds=60),
-                # ScannerAuthError (invalid/expired scanner token, from
-                # fetch_resolutions -> the same scanner-search codepath
-                # fetch_findings_activity uses) and TicketAuthError
-                # (invalid/expired ticket-backend token) never get fixed by
-                # retrying - everything else this activity can raise past
-                # its own per-claim try/excepts (transient existence-check
-                # or auto-close failures) already stays contained inside
-                # the activity itself and never reaches this policy at
-                # all. maximum_attempts=3 matches create_tickets_activity:
-                # this is a bonus step wrapped in the try/except right
-                # below, so it's never worth retrying as hard as
-                # fetch_findings_activity's real pipeline step.
+                # Auth errors are permanent; other failures stay contained
+                # inside the activity's own per-claim try/excepts.
                 retry_policy=RetryPolicy(
                     maximum_attempts=3,
                     non_retryable_error_types=["ScannerAuthError", "TicketAuthError"],
@@ -150,11 +124,8 @@ class ScanToTicketWorkflow:
         except Exception as e:
             workflow.logger.warning(f"Reconciling resolved findings failed, leaving existing tickets untouched: {e}")
 
-        # Attached after create_tickets_activity already returned, not
-        # requested from it directly - reconciliation is a separate
-        # activity that runs afterward, but the CLI's end-of-run report
-        # (src/cli/report.py) wants one combined TicketResult, not two return
-        # values threaded separately through MultiBranchScanWorkflow too.
+        # Merge in here, not returned separately - src/cli/report.py wants one
+        # combined TicketResult.
         ticket_result = ticket_result.model_copy(update={"closed": closed_tickets})
 
         if ticket_result.created:
@@ -171,25 +142,10 @@ class ScanToTicketWorkflow:
                             credentials=input.credentials,
                         ),
                         start_to_close_timeout=timedelta(seconds=45),
-                        # TicketAuthError/TicketValidationError from the
-                        # attach_screenshot()/add_comment() calls this
-                        # activity makes are permanent, same reasoning as
-                        # create_tickets_activity - never fixed by
-                        # retrying. A snippet-rendering failure itself
-                        # (src/scanner/screenshot.py's render_finding_snippet()
-                        # - a bad SonarQube response, no matching Pygments
-                        # lexer, ...) never even reaches this policy at all
-                        # anymore: the activity catches it internally,
-                        # logs which finding and why, and returns normally
-                        # rather than failing - see
-                        # capture_and_attach_screenshot_activity. What's
-                        # left to retry here is genuinely transient
-                        # network/timing on the Jira calls themselves.
-                        # maximum_attempts stays at 2, unchanged - this is
-                        # a best-effort bonus feature
-                        # (asyncio.gather(return_exceptions=True) below),
-                        # never worth retrying as hard as a real pipeline
-                        # step.
+                        # Auth/validation errors are permanent. Snippet-render
+                        # failures are caught inside the activity itself and
+                        # never reach this policy - what's left is transient
+                        # network/timing on the Jira calls.
                         retry_policy=RetryPolicy(
                             maximum_attempts=2,
                             non_retryable_error_types=["TicketAuthError", "TicketValidationError"],

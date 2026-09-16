@@ -24,11 +24,8 @@ from config.migrations import run_migrations
 
 
 def gather_preview() -> tuple[int, int]:
-    """
-    Must be called BEFORE stopping postgres (see src/cli/stack/__init__.py's
-    down()) - counting rows needs a live connection, and stopping the
-    stack stops postgres along with everything else.
-    """
+    """Must be called before stopping postgres - counting rows needs a
+    live connection, and stopping the stack stops postgres too."""
     destinations_count = len(config_store.list_ticket_destinations())
     with config_store.get_connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT count(*) AS count FROM ticket_claims")
@@ -59,31 +56,17 @@ def _run_psql(stack_dir: Path, dbname: str, sql: str) -> None:
 
 
 def reset_gozu_database(stack_dir: Path) -> None:
-    """
-    Resets ONLY gozu's own database: DROP + CREATE, then runs every
-    Alembic revision (src/config/migrations.py's run_migrations(), alembic/
-    versions/) to recreate its schema from scratch against the freshly
-    emptied database - the same call `gozu up` makes on a fresh install,
-    not a separate re-run of a single init.sql file. Replaces the old
-    blanket `docker compose down -v`,
-    which destroyed every database in the Postgres instance (and the
-    instance's container/volume itself) - this never touches the separate
-    `sonarqube` database (db/init_sonarqube_db.sql) or the postgres_data
-    volume as a whole, which is exactly why local-mode SonarQube's own
-    Postgres-backed history now survives a wipe untouched, now that it
-    lives in the same instance instead of a second container.
-    """
+    """Resets ONLY gozu's own database: DROP + CREATE, then runs every
+    Alembic revision to recreate its schema - the same call `gozu up`
+    makes on a fresh install. Never touches the separate `sonarqube`
+    database or the postgres_data volume as a whole."""
     postgres_user = os.environ["POSTGRES_USER"]
     postgres_db = os.environ["POSTGRES_DB"]
 
-    # Can't DROP DATABASE while connected to it, or while anything else
-    # is - connect to Postgres's own always-present "postgres" maintenance
-    # database instead to terminate other connections and do the
-    # drop/recreate. Identifiers interpolated directly (not parameterized)
-    # since DDL can't take bind params for object names anyway - both
-    # values come from this machine's own .env, never remote/untrusted
-    # input, same trust boundary create_backup() already assumes for the
-    # same two values.
+    # Can't DROP DATABASE while connected to it - connect to Postgres's
+    # "postgres" maintenance database instead. Identifiers interpolated
+    # directly since DDL can't take bind params for object names; both
+    # values come from this machine's own .env, never untrusted input.
     _run_psql(
         stack_dir,
         "postgres",
@@ -95,11 +78,8 @@ def reset_gozu_database(stack_dir: Path) -> None:
         """,
     )
 
-    # One mechanism, not two: the same run_migrations() `gozu up` calls on
-    # a fresh install recreates the schema here too - the first Alembic
-    # revision IS the fresh-install case, so a wiped database ends up on
-    # the exact same schema as a genuinely fresh one, not a
-    # separately-maintained copy of it.
+    # Same run_migrations() `gozu up` calls on a fresh install - a wiped
+    # database ends up on the exact same schema as a genuinely fresh one.
     run_migrations(stack_dir)
 
 
@@ -122,9 +102,8 @@ def confirm_and_wipe(
         warning(f"Cancelled ({answer!r} != 'wipe') - nothing was reset; the stack is stopped, not wiped.")
         return
 
-    # down() already stopped postgres as part of the plain-stop step above -
-    # briefly bring it back so pg_dump/psql have something to actually
-    # connect to.
+    # Briefly bring postgres back up (down() already stopped it) so
+    # pg_dump/psql have something to connect to.
     ensure_postgres_up(stack_dir)
     waiting("Backing up gozu's database before resetting it ...")
     create_backup(backup_target, stack_dir)

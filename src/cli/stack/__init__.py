@@ -39,32 +39,19 @@ from scripts.env_ports import DEFAULT_PORTS, ENV_PATH, parse_env_file
 from scripts.paths import STACK_DIR
 
 def ensure_config_store_ready() -> None:
-    """
-    Any command that touches config_store (`gozu config list/edit/delete`,
-    `gozu run`'s config selection) needs a live, migrated Postgres first -
-    the same requirement up() already documents on ensure_postgres_up()
-    itself. up()/down() get this for free because they manage the rest of
-    the stack anyway; these config-only commands don't, and previously
-    called config_store directly with nothing guaranteeing Postgres was
-    even running - confirmed live, that raised a raw
-    psycopg.OperationalError (connection refused) straight to the crash
-    handler instead of a clear message, on a machine where `gozu up`
-    hadn't been run yet (or had since been `down`ed). This is the one
-    place all four callers funnel through instead of repeating
-    require_initialized() + ensure_postgres_up() + run_migrations() four
-    times over.
-    """
+    """Any command touching config_store needs a live, migrated Postgres
+    first - up()/down() get this for free managing the rest of the stack;
+    config-only commands funnel through here instead of repeating the same
+    three calls, so a not-yet-up Postgres gets a clear message instead of a
+    raw psycopg.OperationalError."""
     require_initialized()
     ensure_postgres_up(STACK_DIR)
     run_migrations(STACK_DIR)
 
 
 # env var name -> human-readable label, for `gozu ports`. Iterated in
-# DEFAULT_PORTS's own order (the authoritative list of ports gozu itself
-# manages - see src/scripts/env_ports.py) rather than hand-maintained
-# separately, so a port added there can't silently go unlabeled here; an
-# unrecognized name (there shouldn't be one) falls back to itself as the
-# label rather than raising.
+# DEFAULT_PORTS's own order so a port added there can't silently go
+# unlabeled here.
 _PORT_LABELS: dict[str, str] = {
     "POSTGRES_PORT": "Postgres",
     "SONARQUBE_PORT": "SonarQube",
@@ -75,42 +62,29 @@ _PORT_LABELS: dict[str, str] = {
 
 
 def up(config: str | None = None) -> None:
-    """
-    Brings up Postgres, applies any pending database migrations
-    (src/config/migrations.py - covers a genuinely fresh database too, not
-    just an upgrade), then every always-on/profile-active service in one
-    `docker compose up -d`.
-    Wrapped in InterruptCleanup (src/cli/stack/cleanup.py) so a Ctrl-C/SIGTERM
-    partway through only tears down what THIS invocation itself started -
-    whatever was already up and healthy before this ran is left untouched.
+    """Brings up Postgres, applies pending migrations, then every
+    always-on/profile-active service in one `docker compose up -d`.
+    Wrapped in InterruptCleanup so a Ctrl-C/SIGTERM only tears down what
+    this invocation itself started.
 
     `config`, when given, scopes profile activation to that one config
-    instead of the aggregate-across-everything default: active_profiles()
-    (src/cli/stack/profiles.py) already just takes whatever list of config
-    dicts it's handed, so a single-element list here is enough - no
-    change needed there. Always-on services (postgres/temporal/worker)
-    start either way; only which OPTIONAL profiles (sonarqube-local,
-    webhook) activate is affected, and the post-up webhook-URL summary
-    below reflects only the selected config too, not every webhook-mode
-    config in the store.
+    instead of every config in the store - always-on services start
+    either way; only optional profiles (sonarqube-local, webhook) and the
+    post-up webhook-URL summary are affected.
     """
     require_initialized()
 
     with InterruptCleanup(STACK_DIR) as cleanup:
-        # Tracked BEFORE calling ensure_postgres_up(), not after it returns
-        # - confirmed live that an interrupt landing while still blocked
-        # waiting for postgres's own healthcheck never reaches a
-        # post-call tracking line at all.
+        # Tracked BEFORE calling ensure_postgres_up(), not after - an
+        # interrupt while still blocked on postgres's healthcheck would
+        # otherwise never reach a post-call tracking line.
         if not is_service_up(STACK_DIR, "postgres"):
             cleanup.track("postgres")
         waiting("Bringing up Postgres ...")
         ensure_postgres_up(STACK_DIR, cleanup=cleanup)
 
-        # Before anything else touches the config store below - migration
-        # 0001 IS the fresh-install case (src/config/migrations.py), applied
-        # the same way as every migration after it, so this is what
-        # actually creates the schema on a genuinely fresh database now,
-        # not Postgres's own docker-entrypoint-initdb.d hook.
+        # Migration 0001 creates the schema on a fresh database now, not
+        # Postgres's own docker-entrypoint-initdb.d hook.
         waiting("Applying database migrations ...")
         applied = run_migrations(STACK_DIR)
         if applied:
@@ -125,16 +99,10 @@ def up(config: str | None = None) -> None:
 
         profiles = active_profiles(configs)
 
-        # A single `docker compose up -d` below brings up every
-        # not-yet-running candidate service in one shot - there's no
-        # natural per-service "started fresh" signal from one combined
-        # subprocess call the way ensure_service_up() gives src/cli/init_wizard/.
-        # Instead: whatever isn't already up right now (checked BEFORE
-        # issuing that command) is what this invocation is about to start,
-        # tracked so an interrupt partway through only stops those. Safe
-        # even for one that in fact never got created before the
-        # interrupt landed - `docker compose stop` on a not-yet-existing
-        # container is a no-op, not an error.
+        # One combined `docker compose up -d` gives no per-service "started
+        # fresh" signal, so track whatever isn't already up right now,
+        # before issuing it - `docker compose stop` on a not-yet-existing
+        # container is a no-op either way.
         for service in services_for_profiles(profiles):
             if service != "postgres" and not is_service_up(STACK_DIR, service):
                 cleanup.track(service)
@@ -154,23 +122,13 @@ def up(config: str | None = None) -> None:
 
 
 def down(wipe: bool = False) -> None:
-    """
-    Stop the stack. Plain `down`: containers stop (now correctly including
-    profile-tagged services like sonarqube-local/webhook) - volumes/data
-    persist, same non-destructive behavior as always. `down --wipe`: resets
-    gozu's own database (configs, ticket destinations, dedupe claims) -
-    the one irreversible command in this CLI, gated behind typing the
-    literal word "wipe". Never touches local-mode SonarQube's own
-    Postgres-backed database (a genuinely separate database in the same
-    instance, see db/init_sonarqube_db.sql) or its volumes - those aren't
-    part of --wipe's destructive scope at all.
+    """Stop the stack. Plain `down`: containers stop, volumes/data persist.
+    `down --wipe`: resets gozu's own database (configs, destinations,
+    dedupe claims) - the one irreversible command in this CLI, gated
+    behind typing "wipe". Never touches SonarQube's own database/volumes.
 
-    Also wrapped in InterruptCleanup: `down` itself can start Postgres
-    fresh (same as `up`/`init` - it needs a live connection just to read
-    configs before it can stop anything), so an abrupt interrupt between
-    that and this function's own stop() call could otherwise leave it
-    dangling instead of torn back down.
-    """
+    Wrapped in InterruptCleanup since `down` can start Postgres fresh just
+    to read configs before it can stop anything."""
     require_initialized()
 
     with InterruptCleanup(STACK_DIR) as cleanup:
@@ -180,19 +138,13 @@ def down(wipe: bool = False) -> None:
         configs = config_store.list_configs()
         profiles = active_profiles(configs)
 
-        # Gathered before stop() below runs, deliberately - stop() stops
-        # postgres along with everything else, and counting rows needs a
-        # live connection.
+        # Gathered before stop() below, since stop() stops postgres too and
+        # counting rows needs a live connection.
         destinations_count = claims_count = 0
         if wipe:
             destinations_count, claims_count = gather_preview()
 
         stop(profiles, STACK_DIR)
-        # stop() above already stopped whatever ensure_postgres_up started
-        # (if anything) as part of down()'s own normal completion - once
-        # we're here, there's nothing left for an interrupt during the
-        # --wipe confirmation prompt below (outside this `with` block) to
-        # need cleaning up.
 
     if not wipe:
         return
@@ -201,30 +153,17 @@ def down(wipe: bool = False) -> None:
 
 
 def status() -> None:
-    """
-    Read-only status check: prints every service's current state (never
-    created / stopped / starting / healthy / unhealthy) without bringing
-    anything up - no ensure_*_up() call anywhere in this function, so it's
-    safe to run any time, including when nothing at all is running yet.
-
-    Uses ALL_PROFILES (every service gozu could ever manage), not just
-    the ones this machine's current configs happen to need - deliberately
-    doesn't read configs from Postgres to narrow that down, since
-    Postgres itself might be exactly the thing that's down right now, and
-    this command must still work in that case.
-    """
+    """Read-only status check, safe to run any time - no ensure_*_up() call
+    anywhere. Uses ALL_PROFILES rather than reading configs from Postgres,
+    since Postgres itself might be exactly what's down right now."""
     require_initialized()
     print_stack_status(STACK_DIR, ALL_PROFILES)
 
 
 def ports() -> None:
-    """
-    Prints the real host-side port each service resolved to, straight
-    from ~/.gozu/stack/.env - bootstrap_env.py auto-increments past
-    whatever's already taken on this machine at `gozu init` time, so a
-    service's actual port can differ from its documented default (e.g.
-    SonarQube landing on 9001 because something else already had 9000).
-    """
+    """Prints the real host-side port each service resolved to - bootstrap_env.py
+    auto-increments past whatever's already taken, so a service's actual
+    port can differ from its documented default."""
     require_initialized()
     values = parse_env_file(ENV_PATH)
     typer.echo("Ports:")

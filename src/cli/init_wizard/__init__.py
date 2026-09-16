@@ -14,20 +14,15 @@
 """
 `gozu init` - the interactive setup wizard. Provisions .env, checks/
 installs prerequisites, walks through scanner + ticket credential
-selection (via src/cli/wizard_engine.py's shared review/edit engine - same
-one `gozu config edit` uses), and seeds one row via config.store.
-create_config(). Ends at "a named config exists in Postgres" - actually
-running a scan is src/cli/scan_runner.py.
+selection (via src/cli/wizard_engine.py's shared review/edit engine), and
+seeds one row via config_store.create_config(). Ends at "a named config
+exists in Postgres" - actually running a scan is src/cli/scan_runner.py.
 
 Structural/branching questions (which scanner, Local vs Cloud, Free vs
-Premium, reuse-vs-create a ticket destination) are resolved directly,
-one-shot, exactly as before - they decide WHICH value-level fields exist
-at all, and are never themselves revisable through the review screen
-(see src/cli/wizard_engine.py's own docstring for why). Only the resulting
-value fields (project_key, branches, and every credential) go through the
-engine, so a fresh config's WizardField list looks different depending on
-scanner_mode/sonar_plan/trigger_mode, built here rather than executed
-inline one prompt after another.
+Premium, reuse-vs-create a ticket destination) are resolved one-shot and
+decide which value-level fields exist at all; they're never revisable
+through the review screen. Only the resulting value fields go through
+the engine, built here per scanner_mode/sonar_plan/trigger_mode.
 """
 
 from pathlib import Path
@@ -103,18 +98,10 @@ def _prompt_config_name() -> str:
 def _build_fields(
     state: dict, stack_dir: Path, cleanup: InterruptCleanup, scanner_mode: str
 ) -> tuple[list[WizardField], str, str | None]:
-    """
-    Resolves the remaining structural questions (SonarQube host/infra for
-    Local; Free-vs-Premium for Cloud; reuse-vs-create a ticket
-    destination) and returns the value-level WizardField list they imply,
-    plus the trigger_mode/sonar_plan those structural answers fix
-    directly (never part of the field list - see this module's own
-    docstring). `state` is mutated with each structural, non-revisable
-    value too (sonar_host_url; destination_choice/existing_destination_id
-    aren't config fields at all, so they're returned rather than stashed
-    in `state`) - every WizardField closure below reads/writes `state` by
-    reference, per src/cli/wizard_engine.py's contract.
-    """
+    """Resolves the remaining structural questions and returns the
+    value-level WizardField list they imply, plus trigger_mode/sonar_plan.
+    `state` is mutated with each structural value; every WizardField
+    closure below reads/writes `state` by reference."""
     fields: list[WizardField] = []
     sonar_plan: str | None = None
 
@@ -187,13 +174,8 @@ def _build_fields(
     state["_existing_destination_id"] = existing_destination_id
     if destination_choice == "new":
         def _prompt_destination_name() -> str:
-            # Printed here, not inline above - this whole function only
-            # BUILDS the field list; run_wizard() is what actually
-            # prompts each field, later and in list order (SonarQube
-            # fields first). A plain typer.secho() here would fire while
-            # still building the list, before the SonarQube fields above
-            # had even been prompted yet - confirmed live, that showed
-            # this header before the *previous* section's own prompts.
+            # Printed here, not inline above - this function only builds the
+            # field list; run_wizard() prompts each field later, in order.
             typer.secho("Jira details", bold=True)
             return prompt_destination_name()
 
@@ -225,12 +207,9 @@ def _build_fields(
 
 
 def _commit(state: dict, name: str, scanner_type: str, scanner_mode: str, trigger_mode: str, sonar_plan: str | None) -> None:
-    """
-    Everything up to here was in-memory only - this is the one place
-    `gozu init` actually writes to Postgres, called once, after "Looks
-    good - save" is chosen. A new ticket destination (if that's what was
-    chosen) is created first, since create_config() needs its id.
-    """
+    """The one place `gozu init` actually writes to Postgres, called once
+    after "Looks good - save" is chosen. A new ticket destination is
+    created first, since create_config() needs its id."""
     if state["_destination_choice"] == "new":
         ticket_destination_id = config_store.create_ticket_destination(
             name=state["destination_name"],
@@ -276,28 +255,16 @@ def _commit(state: dict, name: str, scanner_type: str, scanner_mode: str, trigge
 
 
 def _run_init_wizard_body(stack_dir: Path, cleanup: InterruptCleanup) -> None:
-    # Postgres has to come up right here, before `gozu up` is ever run,
-    # because create_config() below needs a live connection to save this
-    # config at all. Tracked BEFORE calling ensure_postgres_up(), not after
-    # it returns - confirmed live that an interrupt landing while still
-    # blocked waiting for postgres's own healthcheck (the single highest-
-    # value moment to actually interrupt) never reaches a post-call
-    # tracking line at all, so it would otherwise leave a container Docker
-    # already created untracked and uncleaned-up. Pre-checking is_service_up()
-    # first means only a genuinely-not-already-running postgres gets
-    # tracked - the whole point of "only what this invocation itself
-    # started fresh".
+    # Tracked BEFORE calling ensure_postgres_up(), not after - an interrupt
+    # while still blocked on postgres's healthcheck would otherwise leave a
+    # container Docker already created untracked and uncleaned-up.
     if not is_service_up(stack_dir, "postgres"):
         cleanup.track("postgres")
     waiting("Bringing up Postgres ...")
     ensure_postgres_up(stack_dir, cleanup=cleanup)
 
-    # A genuinely fresh Postgres volume has no gozu schema at all yet -
-    # migration 0001 is what creates it (see src/config/migrations.py), same
-    # as `gozu up`'s own post-ensure_postgres_up() step. Without this,
-    # _prompt_config_name()'s list_configs() call below (and _commit()'s
-    # create_config() after it) would hit a bare "relation does not
-    # exist" instead of gozu's very first run ever working at all.
+    # A fresh Postgres volume has no gozu schema yet - migration 0001
+    # creates it, same as `gozu up`'s own post-ensure_postgres_up() step.
     waiting("Applying database migrations ...")
     applied = run_migrations(stack_dir)
     if applied:
@@ -307,9 +274,7 @@ def _run_init_wizard_body(stack_dir: Path, cleanup: InterruptCleanup) -> None:
     scanner_type = _select_scanner()
     scanner_mode = select_scanner_mode()
 
-    # Both scanner_modes run sonar-scanner on THIS host (see
-    # step_ensure_prerequisites()'s docstring) - unconditional, not gated
-    # on Local vs Cloud.
+    # Both scanner_modes run sonar-scanner on this host - unconditional.
     step_ensure_prerequisites()
 
     state: dict = {}
@@ -323,22 +288,15 @@ def _run_init_wizard_body(stack_dir: Path, cleanup: InterruptCleanup) -> None:
 
 
 def run_init_wizard() -> None:
-    """
-    `gozu init` can bring up Docker services during its own run (Postgres,
-    always; SonarQube too, for a fresh Local config with nothing already
-    running - see src/cli/init_wizard/sonar_local.py). Wrapped in
-    InterruptCleanup (src/cli/stack/cleanup.py) so a Ctrl-C/SIGTERM partway
-    through only tears down what THIS run itself started fresh, never a
-    service that predates it.
-    """
+    """`gozu init` can bring up Docker services during its own run (Postgres
+    always; SonarQube for a fresh Local config). Wrapped in InterruptCleanup
+    so a Ctrl-C/SIGTERM only tears down what this run itself started."""
     typer.secho("gozu init", bold=True, underline=True)
 
     step_bootstrap_env()
 
-    # Materializes docker-compose.yml/Dockerfile/sql/ (+ the source
-    # tree the worker/receiver images build from) into ~/.gozu/ - see
-    # src/cli/stack/files.py. Pure file writes, no Docker interaction - safe to
-    # do before the interrupt-cleanup scope even starts.
+    # Pure file writes, no Docker interaction - safe before the
+    # interrupt-cleanup scope even starts.
     stack_dir = ensure_stack_files()
 
     with InterruptCleanup(stack_dir) as cleanup:

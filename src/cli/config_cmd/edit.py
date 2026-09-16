@@ -12,14 +12,10 @@
 # Depends on: src/cli/wizard_engine.py - the shared review/edit engine this command drives
 
 """
-`gozu config edit <name>` - reuses src/cli/wizard_engine.py, the same
-review/edit engine `gozu init` uses, but skips straight to the review
-screen (walk_first=False) pre-populated from the config's current values,
-and restricted to only the editable fields: project_key, ticket_cap,
-branches, sonar_token, sonar_organization/sonar_host_url, webhook_secret,
-and the Jira fields. scanner_type/scanner_mode/sonar_plan/trigger_mode are
-structural (decided once, at `gozu init` time) and are never offered as
-edit options here at all - only their VALUES change hands.
+`gozu config edit <name>` - reuses src/cli/wizard_engine.py, skipping
+straight to the review screen pre-populated from the config's current
+values. scanner_type/scanner_mode/sonar_plan/trigger_mode are structural
+(decided once at `gozu init` time) and are never offered here.
 """
 
 import questionary
@@ -45,27 +41,19 @@ from cli.stack import ensure_config_store_ready
 from cli.status import success, warning
 from cli.wizard_engine import WizardField, run_wizard
 
-# credentials keys resolved via a shared ticket_destination when one is
-# set - mirrors src/config/store.py's own _DESTINATION_RESOLVED_KEYS exactly
-# (that module is the actual authority on which keys resolve where; this
-# is just what decides whether to show the multi-config warning before
-# writing any of them).
+# Mirrors src/config/store.py's own _DESTINATION_RESOLVED_KEYS - decides
+# whether to show the multi-config warning before writing.
 _DESTINATION_RESOLVED_KEYS = {"jira_url", "jira_email", "jira_api_token", "jira_project_key"}
 
-# configs.project_key/configs.branches/configs.ticket_cap are plain
-# columns (see config_store.update_config_fields()); every other
-# editable field here is a credential (config_store.update_config_credential()).
+# Plain columns (config_store.update_config_fields()); every other
+# editable field is a credential (update_config_credential()).
 _PLAIN_COLUMN_KEYS = {"project_key", "branches", "ticket_cap"}
 
 
 def _prompt_ticket_cap(current: int | None) -> int | None:
-    """
-    The PERSISTENT per-config default (`gozu run -t` is a separate,
-    one-off, never-saved override - see src/cli/main.py) - blank always means
-    "use the built-in fallback (30)", never 0, so leaving it blank reads
-    back as "(not set)" on the review screen exactly like a truly unedited
-    field, not a confusing explicit zero.
-    """
+    """The persistent per-config default (`gozu run -t` is a separate,
+    one-off override). Blank always means "use the built-in fallback",
+    never an explicit 0."""
     default = str(current) if current is not None else ""
     while True:
         answer = ask_or_exit(
@@ -130,12 +118,9 @@ def _build_edit_fields(config: dict, state: dict) -> list[WizardField]:
                 "SonarQube Cloud organization key",
                 lambda: prompt_sonar_organization(state.get("sonar_organization", "")),
             ),
-            # Free's branch is a single value (config.py's prompt_free_branch()
-            # strips to one), but its underlying prompt_text()+strip is exactly
-            # what a single already-set branches string needs too, and
-            # prompt_premium_branches() (comma-join) degrades to the same
-            # single value for a one-branch string - reused either way rather
-            # than adding a third near-identical branches prompt just for edit.
+            # prompt_premium_branches()'s comma-join degrades to a single
+            # value for a one-branch string, so it's reused here rather than
+            # adding a third near-identical branches prompt just for edit.
             WizardField(
                 "branches", "Branches to track", lambda: prompt_premium_branches(state.get("branches", "main"))
             ),
@@ -180,9 +165,8 @@ def _build_edit_fields(config: dict, state: dict) -> list[WizardField]:
 def edit_command(name: str) -> None:
     ensure_config_store_ready()
     config = resolve_config_or_prompt(name)
-    # Use the resolved config's own name from here on, not the (possibly
-    # wrong) `name` argument - resolve_config_or_prompt() may have picked
-    # a different config via its "did you mean" recovery picker.
+    # Use the resolved config's own name from here - resolve_config_or_prompt()
+    # may have picked a different one via its "did you mean" recovery picker.
     name = config["name"]
 
     state: dict = {}

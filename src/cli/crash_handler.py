@@ -2,21 +2,16 @@
 # Author: Wasiullah Rafeeq S
 
 """
-Last-resort handler for a genuinely unexpected exception escaping the whole
-`gozu` invocation - see src/cli/main.py's `main()`, the sole caller, which wraps
-`app()` and only reaches this for an exception that ISN'T one of Typer/
-Click's own deliberate control-flow exceptions (typer.Exit, SystemExit,
-KeyboardInterrupt) - those already exited cleanly on their own and never
-reach here.
+Last-resort handler for a genuinely unexpected exception escaping the
+whole `gozu` invocation - only reached for exceptions that aren't Typer/
+Click's own control-flow exceptions (typer.Exit, SystemExit,
+KeyboardInterrupt), which already exited cleanly on their own.
 
-Deliberately does NOT send email automatically: that would require gozu to
-hold its own SMTP/API credentials (a new class of secret this codebase has
-otherwise been careful to avoid), could silently fail exactly when
-network/mail infra is what's broken, and risks a raw traceback landing in
-an inbox with nobody having reviewed it first. Instead, a pre-filled
-mailto: link is built and shown - a person still decides whether/what to
-send - and the raw traceback never touches the terminal at all, only a
-timestamped file under LOGS_DIR.
+Deliberately does NOT send email automatically - that would need gozu to
+hold its own SMTP/API credentials, could silently fail exactly when
+mail infra is what's broken, and risks an unreviewed traceback landing
+in an inbox. Instead a pre-filled mailto: link is shown, and the raw
+traceback only ever touches a timestamped file under LOGS_DIR.
 """
 
 import traceback
@@ -40,12 +35,8 @@ def _write_traceback_log(exc: BaseException) -> Path:
 
 
 def _build_mailto_link(log_path: Path) -> str:
-    """
-    mailto: links can't attach files and have no reliable length budget for
-    a full traceback in the body - so the body only references the log
-    file's path and asks the sender to attach/paste it themselves, rather
-    than trying to embed the traceback text directly.
-    """
+    """mailto: links can't attach files or reliably fit a full traceback,
+    so the body just references the log file's path."""
     recipients = ",".join(CONTACT_EMAILS)
     subject = quote("Gozu error report")
     body = quote(
@@ -65,18 +56,7 @@ def handle_unexpected_exception(exc: BaseException) -> None:
     typer.echo(f"Full details were logged to: {log_path}")
     typer.echo()
     typer.echo("If you'd like to report this:")
-    # rich's own link markup, not a raw escape sequence built by hand -
-    # Console.print() only emits the actual OSC 8 hyperlink escape
-    # sequence when it detects a real terminal (Console.is_terminal);
-    # piped/redirected output (a log capture, a non-interactive CI
-    # runner) gets the plain visible text with no escape codes at all,
-    # confirmed live - never raw escape bytes dumped into a file. A real
-    # terminal that IS attached but doesn't understand OSC 8 still gets
-    # a well-formed escape sequence it's expected to silently pass
-    # through per the OSC 8 spec, leaving just the visible text - the
-    # same plain-text floor as before this change, not something new to
-    # implement here. The mailto: URL's own content (recipients,
-    # subject, URL-encoded body referencing the log path) is completely
-    # unchanged - only the visible label changes from the raw URL to
-    # "Report this error".
+    # rich's link markup only emits the OSC 8 escape sequence for a real
+    # terminal; piped/redirected output gets plain visible text instead,
+    # never raw escape bytes dumped into a file.
     Console().print(f"  [link={mailto_link}]Report this error[/link]")

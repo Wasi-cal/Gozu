@@ -7,18 +7,12 @@
 
 """
 Renders a syntax-highlighted PNG snippet of the source lines around a
-finding, server-side via Pygments
+finding, server-side via Pygments.
 
 render_finding_snippet() fetches the raw source lines directly from
-SonarQube's REST API (/api/sources/lines), not by rendering any page -
-this process was already able to make that same authenticated call for
-everything else (src/scanner/sonarqube_common.py), so this needed no new
-capability, just a new endpoint.
-
-The annotation text SonarQube's own UI showed alongside the snippet
-(the old Playwright code scraped it from the rendered DOM) is simply
-`finding.message` now - the exact same string the API already gave us
-when the finding was first fetched, never scraped from anywhere.
+SonarQube's REST API (/api/sources/lines), not by rendering any page.
+The annotation text is simply `finding.message` - the same string the
+API already gave us when the finding was fetched, never scraped.
 """
 
 import io
@@ -37,27 +31,18 @@ DEFAULT_CONTEXT_LINES = 5
 
 
 def _host_url_from_deep_link(deep_link: str) -> str:
-    """
-    The finding's own deep_link already encodes exactly which SonarQube
-    host it came from (src/scanner/sonarqube_common.py builds it as
-    "{base_url}/project/issues?id=..."), for both Local and Cloud
-    configs - reusing it here means render_finding_snippet() needs no
-    separate host_url/scanner_mode plumbing threaded through
-    ScreenshotAttachInput just to find the same information a second way.
-    """
+    """The finding's own deep_link already encodes which SonarQube host it
+    came from - reusing it avoids threading a separate host_url through
+    ScreenshotAttachInput."""
     parts = urlsplit(deep_link)
     return f"{parts.scheme}://{parts.netloc}"
 
 
 def fetch_snippet_lines(finding: Finding, token: str, context_lines: int) -> tuple[list[str], int]:
-    """
-    Returns (plain-text source lines, the first line's real file line
-    number) - the caller needs that offset to know where the flagged
-    line falls WITHIN the returned snippet, not just within the file.
-
-    Public - src/llm/enrich.py is a second caller (fetches a wider context
-    window to hand to the LLM alongside the rule's how-to-fix guidance).
-    """
+    """Returns (plain-text source lines, the first line's real file line
+    number) - the caller needs that offset to locate the flagged line
+    within the snippet, not just within the file. Public - src/llm/enrich.py
+    is a second caller."""
     line = finding.line or 1
     from_line = max(1, line - context_lines)
     to_line = line + context_lines  # SonarQube itself clamps a `to` past EOF - confirmed live, no error.
@@ -76,14 +61,9 @@ def fetch_snippet_lines(finding: Finding, token: str, context_lines: int) -> tup
 
 
 def render_finding_snippet(finding: Finding, token: str, context_lines: int = DEFAULT_CONTEXT_LINES) -> bytes:
-    """
-    Fetch the source lines around `finding.line` (±`context_lines`) and
-    render them as a syntax-highlighted PNG, the flagged line
-    highlighted. Raises on any failure (a bad response, no lexer
-    somehow, ...) rather than swallowing it - the caller
-    (src/temporal/activities/capture_and_attach_screenshot.py) is what
-    decides how to make that visible, not this function.
-    """
+    """Fetch the source lines around `finding.line` and render them as a
+    syntax-highlighted PNG. Raises on any failure rather than swallowing
+    it - the caller decides how to make that visible."""
     lines, from_line = fetch_snippet_lines(finding, token, context_lines)
     code = "\n".join(lines)
 

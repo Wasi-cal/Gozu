@@ -31,26 +31,18 @@ from ticket.jira_sprint import SprintAssigner
 # of creating a second one.
 ROLLUP_LABEL = "gozu-backlog-rollup"
 
-# How many of the deferred findings' keys/rules/severities to actually
-# list in the rollup ticket's description before summarizing the rest -
-# a genuinely large backlog (hundreds of findings) would make for an
-# unreadable ticket body otherwise.
+# Caps how many deferred findings get listed in the rollup description
+# before summarizing the rest, so a large backlog stays readable.
 _ROLLUP_DESCRIPTION_MAX_LINES = 50
 
-# Exact names a Jira admin must give these OPTIONAL custom fields
-# (Short text / Number / Short text respectively - see README.md's Jira
-# setup section) for discover_custom_fields() to find them. None existing
-# is the default, unchanged-from-today state: Component/Line/Severity
-# stay embedded in Description text instead.
+# Exact names a Jira admin gives these OPTIONAL custom fields (see README.md's
+# Jira setup section) for discover_custom_fields() to find them - unset,
+# Component/Line/Severity stay embedded in Description text instead.
 CUSTOM_FIELD_COMPONENT_NAME = "SonarQube Component"
 CUSTOM_FIELD_LINE_NAME = "SonarQube Line"
-# The RAW SonarQube severity (CRITICAL/HIGH/MEDIUM/LOW/INFO) as its own
-# field, distinct from Jira's own `priority` (always set, see
-# _build_create_payload() - a translated value on Jira's own
-# Highest/High/Medium/Low/Lowest scale, via SEVERITY_TO_PRIORITY). Someone
-# who wants the untranslated SonarQube value visible as a real Details-tab
-# field (not just text in Description) creates this custom field; nothing
-# breaks if they don't.
+# The raw SonarQube severity, distinct from Jira's own translated `priority`
+# (SEVERITY_TO_PRIORITY) - lets someone surface the untranslated value as a
+# real field instead of just text.
 CUSTOM_FIELD_SEVERITY_NAME = "SonarQube Severity"
 
 
@@ -71,12 +63,8 @@ class JiraClient(TicketClient):
         return f"jira:{self.base_url}:{self.project_key}"
 
     def _raise_for_status(self, response: requests.Response, action: str) -> None:
-        """
-        Shared by every Jira call this client makes - one place to
-        distinguish permanent failures (never worth retrying) from
-        everything else (404s, 429s, 5xxs, left as a generic RuntimeError,
-        same retryable path as before this existed).
-        """
+        """Shared by every Jira call - distinguishes permanent failures
+        (never worth retrying) from everything else (left as RuntimeError)."""
         if 200 <= response.status_code < 300:
             return
         if response.status_code in (401, 403):
@@ -86,13 +74,8 @@ class JiraClient(TicketClient):
         raise RuntimeError(f"Jira {action} failed with status {response.status_code}: {response.text}")
 
     def ticket_exists(self, ticket_key: str) -> bool:
-        """
-        Whether `ticket_key` still exists in Jira - True on a normal GET,
-        False specifically on 404 (deleted, or never existed). Any other
-        non-2xx (401/403/429/5xx/...) still raises via _raise_for_status()
-        rather than being treated as "gone" - a transient/auth failure
-        must never be misread as evidence the ticket was deleted.
-        """
+        """True on a normal GET, False only on 404 - any other non-2xx
+        still raises, never misread as "deleted"."""
         response = requests.get(
             f"{self.base_url}/rest/api/3/issue/{ticket_key}",
             params={"fields": "key"},
@@ -134,25 +117,10 @@ class JiraClient(TicketClient):
         return summary
 
     def _build_labels(self, finding: Finding) -> list[str]:
-        """
-        Deliberately minimal - "source-sonarqube"/"security"/"type-{type}"
-        used to also be added here, but every one of those already appears
-        as plain text in the description (Source/Type/Severity), so it was
-        pure duplication in the labels list rather than information found
-        only there. Two labels remain, both load-bearing:
-
-        - "source-key-{finding.key}" is NOT decorative - it's the actual
-          dedupe mechanism (find_existing() searches by this exact label,
-          since Jira has no concept of "external ID" to repurpose
-          instead). Removing this would break dedupe, not just cosmetics.
-        - "branch-{branch}" is only added when a real branch value exists
-          (a src/config/scanner with no branch concept - e.g. SonarQube Cloud
-          Free, always "main" and never tagged, see
-          src/cli/scan_runner/scanner_exec.py's _build_scanner_command() -
-          gets no branch label at all rather than a meaningless
-          "branch-none") - useful for filtering a multi-branch project's
-          tickets directly in Jira's own search/JQL.
-        """
+        """Two load-bearing labels: "source-key-{finding.key}" is the actual
+        dedupe mechanism (find_existing() searches by it - Jira has no
+        external-ID concept), and "branch-{branch}" is added only when a
+        real branch exists, for filtering via Jira's own JQL."""
         labels = [f"source-key-{finding.key}"]
         if finding.branch:
             labels.append(f"branch-{_normalize_label_value(finding.branch)}")
@@ -165,14 +133,9 @@ class JiraClient(TicketClient):
         line_moved: bool = False,
         severity_moved: bool = False,
     ) -> dict:
-        """
-        `component_moved`/`line_moved`/`severity_moved` are True when that
-        value is being set as a real custom field instead (see
-        create_ticket()) - the corresponding line is dropped here so it
-        isn't shown twice. deep_link is never included here at all anymore
-        - it's a native remote link now (create_ticket()'s
-        _create_remote_link() call), not embedded text.
-        """
+        """`*_moved` is True when that value is set as a real custom field
+        instead, so it's dropped here to avoid showing it twice. deep_link
+        is a native remote link now (create_ticket()), never embedded text."""
         details = []
         if not component_moved:
             details.append(f"Component: {finding.component}")
@@ -185,41 +148,23 @@ class JiraClient(TicketClient):
             f"Source: {finding.source_tool}",
             f"Branch: {finding.branch or 'unknown'}",
         ]
-        # llm_explanation, when present, replaces the raw SonarQube message
-        # with an LLM-generated plain-English explanation + suggested fix -
-        # see src/core/models.Finding's llm_explanation docstring.
+        # llm_explanation, when present, replaces the raw message with an
+        # LLM-generated explanation + suggested fix.
         content = [paragraph(finding.llm_explanation or finding.message), bullet_list(details)]
         if finding.how_to_fix:
-            # Rule-level guidance ("fix this class of issue"), never a fix
-            # tailored to this exact line - see src/core/models.Finding's
-            # how_to_fix docstring. code_block() over another bullet_list -
-            # SonarQube's rule descriptions mix prose with real
-            # before/after code examples, and a monospace block is a
-            # reasonable, if imperfect, way to keep that at least legible
-            # after HTML-to-plain-text stripping (src/scanner/html_text.py)
-            # collapses the original formatting.
+            # Rule-level guidance, not tailored to this line. code_block()
+            # keeps SonarQube's prose+code rule descriptions legible after
+            # src/scanner/html_text.py strips the original HTML formatting.
             content.append(paragraph("How to fix:"))
             content.append(code_block(finding.how_to_fix))
         return doc(*content)
 
     def discover_custom_fields(self, names: list[str]) -> dict[str, str]:
-        """
-        Queries Jira's full field list ONCE (see create_tickets_activity,
-        which calls this a single time per activity execution, not once
-        per ticket - the same Jira instance backs every ticket in a run)
-        and returns whichever of `names` (exact match against Jira's
-        field "name") actually exist in this instance, as
-        name -> "customfield_XXXXX". A name with no match simply isn't a
-        key in the returned dict - this is a lookup, not a requirement;
-        create_ticket() treats a missing name as "keep that content in
-        Description", exactly like today.
-
-        Existing globally is NOT the same as being usable - a field can
-        exist in this Jira instance but not be on this project's
-        create/edit screen, which this list-all-fields query has no way
-        to detect. See create_ticket()'s write-time fallback for the case
-        this can't catch.
-        """
+        """Called once per activity run, not per ticket. Returns whichever of
+        `names` exist in this instance as name -> "customfield_XXXXX"; a
+        missing name isn't an error, create_ticket() just keeps that
+        content in Description. Existing globally != usable on this
+        project's screen - see create_ticket()'s write-time fallback."""
         response = requests.get(f"{self.base_url}/rest/api/3/field", auth=self.auth, headers=self.headers)
         self._raise_for_status(response, "list fields")
         wanted = set(names)
@@ -255,17 +200,10 @@ class JiraClient(TicketClient):
         return {"fields": fields}
 
     def _rejected_custom_field_ids(self, response: requests.Response, candidate_ids: set[str]) -> set[str]:
-        """
-        Parses a 400 create-issue response for Jira's per-field "errors"
-        object, returning whichever of `candidate_ids` (the customfield_
-        XXXXX ids create_ticket() actually tried to set) Jira rejected -
-        empty if the response has no per-field errors at all, OR if it
-        names anything NOT in `candidate_ids` (a genuinely unrelated
-        validation failure - a bad project key, an invalid issue type -
-        which must keep raising TicketValidationError exactly as before,
-        never be silently retried away just because a custom field was
-        also involved).
-        """
+        """Parses a 400 create-issue response for which `candidate_ids` Jira
+        rejected. Empty if the errors name anything outside `candidate_ids` -
+        an unrelated validation failure must keep raising normally, never
+        get silently retried just because a custom field was also involved."""
         try:
             body = response.json()
         except ValueError:
@@ -286,26 +224,13 @@ class JiraClient(TicketClient):
         self._raise_for_status(response, "create remote link")
 
     def create_ticket(self, finding: Finding, custom_fields: dict[str, str] | None = None) -> str:
-        """
-        Create a Jira issue for a finding, return the new issue key.
+        """Create a Jira issue for a finding, return the new issue key.
 
-        `custom_fields` (from discover_custom_fields(), called once per
-        create_tickets_activity run, not per ticket) is whichever of
-        CUSTOM_FIELD_COMPONENT_NAME/CUSTOM_FIELD_LINE_NAME/
-        CUSTOM_FIELD_SEVERITY_NAME this Jira instance actually has -
-        per-field, not all-or-nothing: only the ones present get set as
-        real custom fields, the rest stay in Description.
-
-        Existing in this Jira instance doesn't guarantee usable on THIS
-        project's create screen - if Jira's response rejects the create
-        specifically because of one or both custom fields (parsed by
-        _rejected_custom_field_ids(), not just any 400), this retries the
-        exact same creation with the rejected field(s) removed and that
-        content folded back into Description instead, logging clearly so
-        a misconfigured field is visible rather than silently degraded.
-        A 400 for any other reason is untouched - _raise_for_status()
-        raises TicketValidationError exactly as it always has.
-        """
+        `custom_fields` is per-field, not all-or-nothing - only the ones
+        present in this instance get set as real fields, the rest stay in
+        Description. If Jira rejects the create because of one or both
+        custom fields, this retries once with the rejected field(s) folded
+        back into Description; any other 400 raises normally."""
         custom_fields = custom_fields or {}
         component_field_id = custom_fields.get(CUSTOM_FIELD_COMPONENT_NAME)
         line_field_id = custom_fields.get(CUSTOM_FIELD_LINE_NAME)
@@ -345,20 +270,14 @@ class JiraClient(TicketClient):
         self._raise_for_status(response, "create issue")
         issue_key = response.json()["key"]
 
-        # The issue above is already created in Jira at this point - sprint
-        # assignment is a bonus, best-effort step (see src/ticket/jira_sprint.py's
-        # own fallbacks for "no board"/"no active sprint"/Kanban), and must
-        # never be able to fail ticket creation itself. Any other failure
-        # here (a network blip, an unexpected Jira response) gets the same
-        # treatment: log and move on, not raise.
+        # Best-effort, must never fail ticket creation itself - see
+        # src/ticket/jira_sprint.py's own no-board/no-active-sprint fallbacks.
         try:
             self._sprints.add_issue(issue_key)
         except Exception as e:
             activity.logger.warning(f"Sprint assignment failed for {issue_key}, leaving it in the backlog: {e}")
 
-        # Native remote link, not embedded Description text - a core Jira
-        # platform capability, always attempted regardless of custom-field
-        # discovery, same best-effort treatment as sprint assignment above.
+        # Native remote link, same best-effort treatment as sprint assignment.
         try:
             self._create_remote_link(issue_key, finding.deep_link)
         except Exception as e:
@@ -418,14 +337,9 @@ class JiraClient(TicketClient):
         return response.json().get("transitions", [])
 
     def transition_to_done(self, issue_key: str) -> bool:
-        """
-        Move `issue_key` to whichever available transition leads to a
-        "done"-category status - workflows vary per project, so this
-        deliberately never hardcodes a status name like "Done"/"Closed",
-        only the statusCategory.key Jira itself guarantees. Returns False
-        (and does nothing) if no such transition is currently available,
-        rather than guessing at the wrong one.
-        """
+        """Moves to whichever transition leads to a "done"-category status -
+        never hardcodes a status name, since workflows vary per project.
+        Returns False if no such transition is currently available."""
         for transition in self.get_transitions(issue_key):
             if transition.get("to", {}).get("statusCategory", {}).get("key") != "done":
                 continue
@@ -470,19 +384,11 @@ class JiraClient(TicketClient):
         )
 
     def upsert_rollup_ticket(self, remaining: list[Finding]) -> str | None:
-        """
-        One shared ticket for however many findings didn't get their own
-        this run (see create_tickets_activity's BACKLOG_CAP) - never one
-        ticket per remaining finding. Checked by ROLLUP_LABEL every call:
-        an existing rollup ticket gets its summary/description updated in
-        place (count included) rather than a new one created alongside it
-        - --watch/webhook mode re-runs this every cycle against what's
-        likely the same persistent backlog, so this must never spam a new
-        "N more findings" ticket per run. `remaining` empty with an
-        existing rollup ticket still updates it (down to 0), reflecting
-        the backlog actually shrinking; empty with no existing ticket is a
-        no-op - nothing to create for a backlog that isn't there.
-        """
+        """One shared ticket for the whole backlog, never one per finding.
+        An existing rollup ticket (found via ROLLUP_LABEL) gets updated in
+        place rather than duplicated, so repeated runs never spam new
+        tickets. Empty `remaining` still updates an existing ticket down to
+        0; with no existing ticket it's a no-op."""
         existing = self._find_by_label(ROLLUP_LABEL)
         if not remaining and existing is None:
             return None

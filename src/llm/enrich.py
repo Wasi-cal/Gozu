@@ -6,21 +6,14 @@
 
 """
 Turns a Blocker/Critical/High finding into a plain-English explanation +
-suggested fix, built from SonarQube's own rule guidance (finding.how_to_fix,
-already fetched by src/scanner/sonarqube_common.py for every finding) plus the
-flagged source code. The caller (src/temporal/activities/create_tickets.py,
-src/github_action/main.py) decides eligibility (severity, anthropic_api_key
-present) and catches failures - this module raises straight through on any
-API error, matching src/llm/factory.py's "let the caller decide" split.
+suggested fix, from SonarQube's rule guidance plus the flagged source code.
+The caller decides eligibility and catches failures - this module raises
+straight through on any API error.
 
-Credential-leak guard: a finding whose rule specifically flags hardcoded
-secrets (SonarQube's per-language "S2068 - Credentials should not be
-hard-coded" rule, or its dedicated `secrets:*` detection engine) means the
-flagged line itself IS the secret - the exact thing this feature must never
-forward to a third-party API. enrich_finding() withholds the code snippet
-entirely for those rules; it still sends the rule's own how_to_fix guidance
-and the finding's generic message, which describe the problem class without
-containing anyone's actual credential.
+Credential-leak guard: a finding whose rule flags hardcoded secrets means
+the flagged line itself IS the secret, so enrich_finding() withholds the
+code snippet entirely for those rules - it still sends the rule's guidance
+and the finding's generic message.
 """
 
 import anthropic
@@ -37,12 +30,9 @@ LLM_CONTEXT_LINES = 15
 _MODEL = "claude-opus-5"
 _MAX_TOKENS = 1024
 
-# Rule-key patterns that flag hardcoded credentials specifically - the
-# flagged snippet itself IS the secret for these, so it must never be sent
-# to the LLM. "secrets:" is SonarQube's dedicated secrets-detection engine
-# (AWS/GCP/Slack keys, etc, e.g. "secrets:S6290"); ":S2068" is the generic
-# "Credentials should not be hard-coded" rule, present per-language
-# ("python:S2068", "java:S2068", "javascript:S2068", ...).
+# "secrets:" is SonarQube's dedicated secrets-detection engine (e.g.
+# "secrets:S6290"); ":S2068" is the per-language "Credentials should not be
+# hard-coded" rule ("python:S2068", "java:S2068", ...).
 _CREDENTIAL_RULE_PREFIXES = ("secrets:",)
 _CREDENTIAL_RULE_SUFFIXES = (":S2068",)
 

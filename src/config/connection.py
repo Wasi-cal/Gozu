@@ -13,13 +13,9 @@ from psycopg.rows import dict_row
 
 
 def env_settings() -> dict[str, str]:
-    """
-    The same POSTGRES_HOST/PORT/USER/PASSWORD/DB env vars get_connection()
-    reads, as a plain dict - pulled out so src/config/migrations.py (which
-    needs these same five values to build a SQLAlchemy URL for Alembic,
-    not a psycopg connection) doesn't duplicate this exact env-var
-    lookup a second time.
-    """
+    """The same env vars get_connection() reads, as a plain dict - pulled
+    out so src/config/migrations.py can build a SQLAlchemy URL from the
+    same values without duplicating the lookup."""
     return {
         "host": os.environ["POSTGRES_HOST"],
         "port": os.environ["POSTGRES_PORT"],
@@ -30,20 +26,10 @@ def env_settings() -> dict[str, str]:
 
 
 def get_connection() -> psycopg.Connection[dict[str, Any]]:
-    # `psycopg.connect` is `Connection.connect`, a classmethod returning
-    # `Self` - calling it unparameterized (the usual `psycopg.connect(...)`)
-    # can't infer the row type from `row_factory` through `Self` in every
-    # type checker (mypy accepts it; pyright doesn't). Parameterizing
-    # `Connection` explicitly before `.connect(...)` resolves `Self`
-    # correctly for both.
-    #
-    # Named individually rather than `**env_settings()` - spreading a
-    # dict[str, str] makes pyright check that `str` against every other
-    # keyword param `connect()` accepts (autocommit: bool,
-    # prepare_threshold: int | None, context: AdaptContext | None, ...),
-    # since any of those could in principle be filled from an arbitrary
-    # str key in the dict. Passing the five keys by name only checks
-    # each against its own (str-compatible) parameter.
+    # Parameterizing `Connection` explicitly resolves the row_factory type
+    # for pyright, which `psycopg.connect(...)` unparameterized can't infer.
+    # Named individually, not `**env_settings()`, so pyright checks each
+    # key against its own parameter rather than every kwarg connect() takes.
     settings = env_settings()
     return psycopg.Connection[dict[str, Any]].connect(
         host=settings["host"],

@@ -1,10 +1,8 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
 
-# Pinned explicitly - otherwise docker compose derives the project name
-# (and so every container/volume/network name) from the compose file's
-# parent directory name, which for a pip install is ~/.gozu/stack/ (see
-# src/cli/stack/files.py), not a checkout dir named after this repo.
+# Pinned explicitly - otherwise the project name (and container/volume
+# names) would derive from ~/.gozu/stack/'s dir name, not this repo's.
 name: gozu
 
 services:
@@ -16,27 +14,17 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-      # Only read by db/init_sonarqube_db.sql below, at first-init time -
-      # not gozu's own database, see the sonarqube service's SONAR_JDBC_*
-      # vars.
+      # Only read by db/init_sonarqube_db.sql below, at first-init time.
       SONARQUBE_DB_PASSWORD: ${SONARQUBE_DB_PASSWORD}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # gozu's own schema (configs, ticket_claims, ...) is no longer
-      # created via this docker-entrypoint-initdb.d hook at all - that
-      # only ever fires once, on a genuinely fresh volume, which is
-      # exactly why --wipe used to need a separate hand-rolled re-run of
-      # the same file. src/config/migrations.py's run_migrations() (Alembic,
-      # called by `gozu up` and `gozu down --wipe`) is now the single,
-      # explicit, authoritative path for both cases - see db/migrations/.
-      #
-      # This SonarQube-database bootstrap stays on the old hook-based
-      # approach, deliberately: it's a single idempotent "ensure this
-      # database/role exists" step with no evolving schema of its own
-      # (SonarQube manages its own schema internally once pointed at an
-      # empty database) - not part of gozu's own migration history.
+      # gozu's own schema is created via src/config/migrations.py's Alembic
+      # migrations (`gozu up` / `gozu down --wipe`), not this hook. This
+      # SonarQube-database bootstrap stays hook-based deliberately: a single
+      # idempotent "ensure this database/role exists" step with no schema
+      # of its own to migrate.
       - ./db/init_sonarqube_db.sql:/docker-entrypoint-initdb.d/init_sonarqube_db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
@@ -64,13 +52,9 @@ services:
     image: sonarqube:community
     profiles: ["sonarqube-local"]
     restart: unless-stopped
-    # Local mode's SonarQube on its own bundled H2 database isn't
-    # recommended beyond quick trials - this points it at a real Postgres
-    # database instead, in the SAME instance/container gozu's own database
-    # already runs in (not a second container), via a genuinely separate
-    # database + role (db/init_sonarqube_db.sql) rather than a schema in
-    # gozu's own - container-to-container on the same Compose network, so
-    # no host.docker.internal indirection is needed here.
+    # Points at a real Postgres database (a separate database+role, not a
+    # schema in gozu's own) in the same container gozu's own DB runs in,
+    # instead of SonarQube's bundled H2.
     environment:
       SONAR_JDBC_URL: jdbc:postgresql://postgres:5432/sonarqube
       SONAR_JDBC_USERNAME: sonarqube
@@ -85,10 +69,7 @@ services:
       - sonarqube_extensions:/opt/sonarqube/extensions
       - sonarqube_logs:/opt/sonarqube/logs
     healthcheck:
-      # wget isn't in this image anymore (removed as of the current
-      # sonarqube:community base) - confirmed live it just fails every
-      # attempt with "wget: not found", so the container never reports
-      # healthy even once SonarQube itself is genuinely up. curl is.
+      # wget isn't in this image anymore; curl is.
       test: ["CMD-SHELL", "curl -sf http://localhost:9000/api/system/status | grep -q '\"status\":\"UP\"'"]
       interval: 10s
       timeout: 5s
@@ -98,10 +79,9 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
-    # Lets src/scanner/client.py's resolve_container_host() reach a host-side
-    # "local" SonarQube (config.sonar_host_url=http://localhost:PORT) via
-    # host.docker.internal - built into Docker Desktop (macOS/Windows)
-    # already; this entry is what makes the same hostname resolve on Linux.
+    # host.docker.internal is built into Docker Desktop already; this entry
+    # makes it resolve on Linux too, so the worker can reach a host-side
+    # "local" SonarQube.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
@@ -119,9 +99,8 @@ services:
 
   receiver:
     build: .
-    # Reuses the worker's image/Dockerfile - same dependencies already
-    # cover Flask/config.store/the Temporal client, so there's nothing
-    # receiver-specific to install; just run a different module.
+    # Reuses the worker's image/Dockerfile - nothing receiver-specific to
+    # install, just run a different module.
     command: ["python", "-m", "receiver.app"]
     profiles: ["webhook"]
     restart: unless-stopped

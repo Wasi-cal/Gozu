@@ -33,12 +33,8 @@ logger = logging.getLogger(__name__)
 
 
 class _ContactEmailsLogFilter(logging.Filter):
-    """
-    Appends CONTACT_EMAILS, as plain text, to every ERROR-level+ record -
-    same spirit as src/temporal/worker.py's equivalent. No terminal is
-    attached here for a clickable mailto: link to make sense of - an ops
-    person reading these logs after the fact is the audience instead.
-    """
+    """Appends CONTACT_EMAILS, as plain text, to every ERROR-level+ record -
+    no terminal here for a clickable mailto: link, so plain text instead."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.levelno >= logging.ERROR:
@@ -51,11 +47,8 @@ for _handler in logging.getLogger().handlers:
 
 
 class _HealthCheckLogFilter(logging.Filter):
-    """
-    Drops werkzeug's per-request access log line for GET /health - Docker
-    polls it every 5s (docker-compose.yml's receiver healthcheck), which
-    would otherwise bury real webhook activity in noise.
-    """
+    """Drops werkzeug's access log line for GET /health - Docker polls it
+    every 5s, which would otherwise bury real webhook activity in noise."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         return "/health" not in record.getMessage()
@@ -63,11 +56,9 @@ class _HealthCheckLogFilter(logging.Filter):
 
 logging.getLogger("werkzeug").addFilter(_HealthCheckLogFilter())
 
-# No CSRF protection needed: this app has no cookies/sessions/HTML forms for
-# an attacker's page to ride on. Each route is authenticated by an
-# HMAC signature keyed to the specific config in the URL (verify_signature.py),
-# which a forged cross-site request can't produce without that config's
-# webhook_secret.
+# No CSRF protection needed: no cookies/sessions/HTML forms to ride on -
+# each route is authenticated by an HMAC signature keyed to the config's
+# webhook_secret, which a forged cross-site request can't produce.
 app = Flask(__name__)
 
 
@@ -120,11 +111,8 @@ def sonarqube_webhook(config_name: str):
 
     branch = payload.get("branch", {}).get("name")
 
-    # No fan-out logic needed here (unlike direct invocation's
-    # MultiBranchScanWorkflow) - SonarQube already delivers one webhook per
-    # branch, so a multi-branch config's `branches` list just gates which
-    # of those deliveries proceed. Null/empty branches means "no
-    # restriction" (matches src/config/store.py/cli/scan_runner/).
+    # No fan-out logic needed here - SonarQube already delivers one webhook
+    # per branch, so `branches` just gates which deliveries proceed.
     config_branches = config.get("branches")
     if config_branches:
         patterns = [b.strip() for b in config_branches.split(",") if b.strip()]

@@ -8,15 +8,13 @@
 # Depends on: src/config/ticket_destinations.py - resolves a config's shared ticket-destination credentials
 
 """
-CRUD for the `configs` + `config_credentials` tables
-(db/migrations/versions/0001_initial_schema.py) - named sets of src/scanner/ticket
-credentials, normalized so a new src/scanner/ticket backend never needs a
-schema change (see that migration for why).
+CRUD for the `configs` + `config_credentials` tables - named sets of
+scanner/ticket credentials, normalized so a new backend never needs a
+schema change.
 
-Every credential value (sonar_token, jira_api_token, webhook_secret, or
-whatever a future backend needs) is encrypted via config.crypto before ever
-reaching Postgres, and decrypted only by get_config() - list_configs()
-never touches them, since it's for a picker list, not for use.
+Every credential value is encrypted via config.crypto before reaching
+Postgres, and decrypted only by get_config() - list_configs() never
+touches them, since it's for a picker list, not for use.
 
 Called "configs", not "profiles" - see db/migrations/versions/0001_initial_schema.py for why.
 """
@@ -50,10 +48,8 @@ __all__ = [
     "update_config_fields",
 ]
 
-# credentials keys that resolve to a shared ticket_destinations row
-# instead of this config's own config_credentials, when one is set - see
-# get_config()'s own resolution below, which update_config_credential()
-# mirrors exactly rather than reimplementing separately.
+# credentials keys that resolve to a shared ticket_destinations row when
+# one is set - update_config_credential() mirrors get_config()'s resolution.
 _DESTINATION_RESOLVED_KEYS = {"jira_url", "jira_email", "jira_api_token", "jira_project_key"}
 
 
@@ -69,26 +65,17 @@ def create_config(
     branches: str | None = None,
     ticket_destination_id: int | None = None,
 ) -> int:
-    """
-    Insert a new config row plus one config_credentials row per entry in
-    `credentials` (each value encrypted before insert), in a single
-    transaction - if the credentials insert fails, the configs row isn't
-    left behind either. Returns the new config's id.
+    """Insert a new config row plus one config_credentials row per entry
+    in `credentials`, in a single transaction. Returns the new config's id.
 
     project_key/sonar_plan/branches live on `configs` itself, not in
-    `credentials` - none are secrets, and config_credentials'
-    decrypt-on-read loop would break trying to Fernet-decrypt a plaintext
-    value. All nullable at the DB level (configs created before each field
-    existed predate it, and not every scanner_mode has a "plan" concept -
-    sonar_plan is Cloud-only, branches is optional everywhere) - treat
-    null/empty as "no restriction" wherever they're read, not an error.
-    `branches` is a comma-separated list (e.g. "main,release/2.0"), one
-    entry for a single-branch config, several for multi-branch Premium.
+    `credentials` - none are secrets. All nullable at the DB level; treat
+    null/empty as "no restriction" wherever read, not an error.
+    `branches` is comma-separated for multi-branch Premium.
 
     `ticket_destination_id` references a shared ticket_destinations row
-    instead of embedding Jira credentials here - leave it None for the
-    legacy shape. get_config() resolves whichever shape a config uses.
-    """
+    instead of embedding Jira credentials here - None for the legacy
+    shape. get_config() resolves whichever shape a config uses."""
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO configs "
@@ -122,19 +109,13 @@ def create_config(
 
 
 def get_config(name: str) -> dict | None:
-    """
-    Look up a config by name: the configs columns at the top level, plus a
-    nested "credentials" dict of decrypted key/value pairs. None if not
-    found, never raises for a miss.
+    """Look up a config by name: configs columns plus a nested
+    "credentials" dict of decrypted key/value pairs. None if not found.
 
     If `ticket_destination_id` is set, Jira fields come from the
-    referenced ticket_destinations row instead of this config's own
-    config_credentials; if NULL (every pre-existing config), they're read
-    straight out of config_credentials as always. Either way the returned
-    "credentials" dict ends up the same flat shape, so callers
-    (src/ticket/factory.py's build_ticket_client()) never need to know which
-    path resolved it.
-    """
+    referenced ticket_destinations row instead of config_credentials.
+    Either way the returned "credentials" dict is the same flat shape, so
+    callers never need to know which path resolved it."""
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT * FROM configs WHERE name = %s", (name,))
         config_row = cur.fetchone()
@@ -164,25 +145,18 @@ def list_configs() -> list[dict]:
 
 
 def delete_config(name: str) -> bool:
-    """
-    Delete a config by name (its config_credentials rows cascade via the
-    FK). Returns True if a row was deleted, False if none existed.
-    """
+    """Delete a config by name (config_credentials rows cascade via FK).
+    Returns True if a row was deleted, False if none existed."""
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM configs WHERE name = %s", (name,))
         return cur.rowcount > 0
 
 
 def set_credential(name: str, key: str, value: str) -> None:
-    """
-    Insert or update a single credential directly on this config's own
-    config_credentials, encrypting `value` first - never resolves a
-    shared ticket_destination, unlike update_config_credential() below.
-    Used by `gozu up` to persist a generated webhook_secret onto a config
-    that predates one, and internally by update_config_credential() for
-    any key that isn't destination-resolved. Raises ValueError if no
-    config named `name` exists.
-    """
+    """Insert or update a single credential directly on this config's own
+    config_credentials - never resolves a shared ticket_destination,
+    unlike update_config_credential() below. Raises ValueError if no
+    config named `name` exists."""
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT id FROM configs WHERE name = %s", (name,))
         row = cur.fetchone()
@@ -197,23 +171,15 @@ def set_credential(name: str, key: str, value: str) -> None:
 
 
 def update_config_fields(name: str, **fields) -> None:
-    """
-    Direct column updates on `configs` for a config that already exists -
-    today only ever called with project_key/branches (`gozu config
-    edit`'s only two non-credential editable fields), but generic over
-    whatever columns are passed as kwargs rather than hardcoding those two
-    names, so it stays correct if another plain column becomes editable
-    later. Raises ValueError if no config named `name` exists, or if
-    `fields` is empty (nothing to update is a caller bug, not a silent
-    no-op).
-    """
+    """Direct column updates on `configs`, generic over whatever columns
+    are passed as kwargs rather than hardcoding names. Raises ValueError
+    if no config named `name` exists, or if `fields` is empty."""
     if not fields:
         raise ValueError("update_config_fields() called with no fields to update")
 
     # sql.Identifier-quoted column names, not an f-string - column names
-    # can't be passed as %s params (those are for values only), and a
-    # plain f-string query is typed as `str`, which psycopg's execute()
-    # doesn't accept (it wants LiteralString/bytes/SQL/Composed).
+    # can't be passed as %s params, and psycopg's execute() doesn't accept
+    # a plain str query.
     set_clause = sql.SQL(", ").join(sql.SQL("{} = %s").format(sql.Identifier(key)) for key in fields)
     query = sql.SQL("UPDATE configs SET {set_clause}, updated_at = now() WHERE name = %s RETURNING id").format(
         set_clause=set_clause
@@ -225,27 +191,18 @@ def update_config_fields(name: str, **fields) -> None:
 
 
 def update_config_credential(name: str, key: str, value: str) -> int:
-    """
-    Update one credential value for an existing config, writing to
-    whichever place it actually lives - this config's own
-    config_credentials, or (for jira_url/jira_email/jira_api_token/
-    jira_project_key, when this config has a ticket_destination_id set) a
-    shared ticket_destinations row - same resolution get_config() already
-    does when READING, mirrored here for writing.
+    """Update one credential value, writing to whichever place it actually
+    lives - this config's own config_credentials, or a shared
+    ticket_destinations row when set - mirroring get_config()'s read-time
+    resolution.
 
-    jira_project_key is a special case even among the destination-
-    resolved keys: it's ticket_destinations.project_key, a plain column,
-    not a ticket_destination_credentials row at all (see
-    create_ticket_destination()) - never encrypted, never looked up as a
-    credential key.
+    jira_project_key is a special case: it's ticket_destinations.project_key,
+    a plain column, never encrypted.
 
     Returns how many OTHER configs also reference the same shared
-    destination (0 if this key isn't destination-resolved, or this config
-    has no ticket_destination_id) - the caller (gozu config edit) is
-    expected to warn/confirm before calling this at all when that count
-    is nonzero, since the change is genuinely shared, not scoped to just
-    this config. Raises ValueError if no config named `name` exists.
-    """
+    destination (0 if not destination-resolved) - callers are expected to
+    warn/confirm before calling this when nonzero. Raises ValueError if no
+    config named `name` exists."""
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT ticket_destination_id FROM configs WHERE name = %s", (name,))
         row = cur.fetchone()

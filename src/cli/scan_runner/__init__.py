@@ -34,51 +34,28 @@ __all__ = ["run_scan_cycle", "select_config"]
 def run_scan_cycle(
     config: dict, path: str, skip_unchanged: bool = False, ticket_cap: int | None = None
 ) -> tuple[str, list[str], TicketResult]:
-    """
-    One full scan -> ticket cycle: ensure prerequisites, run sonar-scanner,
-    wait for SonarQube's server-side analysis to actually finish, then
-    trigger the workflow and wait for its result. Returns the SonarQube
-    compute-engine task id (or a placeholder string when `skip_unchanged`
-    skipped the scan itself), the branch(es) actually scanned, and the
-    (possibly multi-branch-aggregated) TicketResult - for src/cli/report.py's
-    end-of-run summary to render.
+    """One full scan -> ticket cycle: ensure prerequisites, run sonar-scanner,
+    wait for server-side analysis, then trigger the workflow. Returns the
+    task id, branch(es) scanned, and the TicketResult for src/cli/report.py.
 
-    `skip_unchanged` (--skip-unchanged): when the scan path is a git repo
-    whose HEAD SHA and clean/dirty working-tree state exactly match this
-    config's last successful scan (config["last_scan_sha"]/
-    ["last_scan_dirty"], persisted in Postgres - see
-    db/migrations/versions/0007_add_last_scan_tracking.py - so this survives
-    across separate `gozu run` invocations, not just one --watch loop),
-    the scan/fetch/create-tickets sequence is skipped entirely. Auto-close
-    reconciliation still runs every time regardless (trigger_reconcile_only()
-    below) - a human can resolve a finding directly in SonarQube's own UI
-    with zero code changes, so that must never be skipped alongside the
-    scan. A non-git path, or one with no prior recorded state, always
-    scans normally - exactly as if --skip-unchanged were never passed.
+    `skip_unchanged`: when HEAD SHA and working-tree state exactly match
+    the config's last successful scan (persisted in Postgres, surviving
+    across invocations), the scan/fetch/create-tickets sequence is skipped
+    entirely - auto-close reconciliation still runs every time, since a
+    human can resolve a finding directly in SonarQube's UI.
 
-    `ticket_cap` (--ticket-cap/-t): a one-off override for THIS invocation
-    only - resolved here (CLI flag wins if given, else the config's own
-    persisted `ticket_cap`, db/migrations/versions/0008_add_ticket_cap.py)
-    into a single effective value threaded through to
-    create_tickets_activity. Never written back to the config - a
-    genuinely separate knob from `gozu config edit`'s persistent default,
-    even though they share the same fallback-to-BACKLOG_CAP-when-None
-    behavior once resolved.
+    `ticket_cap`: a one-off override for this invocation only, resolved
+    here (CLI flag wins, else the config's persisted value) and never
+    written back to the config.
     """
     ensure_java()
     ensure_sonar_scanner()
 
     effective_ticket_cap = ticket_cap if ticket_cap is not None else config.get("ticket_cap")
 
-    # Captured once, BEFORE sonar-scanner ever runs, and reused below for
-    # the post-scan record too - not re-queried afterward. sonar-scanner
-    # leaves .scannerwork/ behind as untracked cruft in `path`; confirmed
-    # live that re-running `git status --porcelain` after the scan sees
-    # that directory and reports "dirty" even for a genuinely
-    # committed-and-clean tree, which would make --skip-unchanged
-    # permanently useless (every recorded state ends up "dirty",
-    # so no later run could ever match it) if state were captured any
-    # later than this.
+    # Captured before sonar-scanner runs and reused below - sonar-scanner
+    # leaves .scannerwork/ behind, which would make git report "dirty" (and
+    # --skip-unchanged permanently useless) if state were captured any later.
     pre_scan_git_state = git_state(path) if skip_unchanged else None
 
     if skip_unchanged and pre_scan_git_state is not None:
@@ -96,21 +73,12 @@ def run_scan_cycle(
             return "(skipped - no code changes)", [], TicketResult(closed=closed)
 
     # Only tag/query by branch for Premium - self-hosted Community Build
-    # rejects sonar.branch.name outright (a Developer Edition+ feature), and
-    # Free rejects querying anything but "main" at the API level ("Organization
-    # is not allowed to access data from non main branches" - confirmed live)
-    # even though it'll happily tag a scan with any branch name. Both
-    # untagged/unscoped, a scan+fetch just uses whatever each backend treats
-    # as its one implicit branch - see scanner_exec.py's _build_scanner_command().
+    # rejects sonar.branch.name outright, and Free rejects querying anything
+    # but "main" at the API level.
     branch = detect_git_branch(path) if config.get("sonar_plan") == "premium" else None
 
-    # Unlike `branch` above, ticket labeling has no backend restriction to
-    # respect - SonarQube never needs to know or agree with this value for
-    # it to be useful on a Jira ticket, so this is detected for every
-    # scanner_mode/sonar_plan, not just Premium (see
-    # SonarToJiraInput.display_branch's docstring). Confirmed live: without
-    # this, every local/Free-plan ticket showed "Branch: unknown" even
-    # when the scanned checkout was on a real, named branch.
+    # Ticket labeling has no backend restriction, so this is detected for
+    # every plan - without it, local/Free tickets always showed "Branch: unknown".
     display_branch = detect_git_branch(path)
 
     waiting(f"Running sonar-scanner against {path} ...")
@@ -127,18 +95,13 @@ def run_scan_cycle(
     if skip_unchanged and pre_scan_git_state is not None:
         sha, dirty = pre_scan_git_state
         config_store.update_config_fields(config["name"], last_scan_sha=sha, last_scan_dirty=dirty)
-        # Mutated in place, not just persisted to Postgres - a --watch
-        # loop reuses this exact same dict across iterations (see
-        # src/cli/main.py's run()), so the next cycle's comparison above
-        # must see this update immediately too, not just a future
-        # separate `gozu run` invocation re-reading it fresh from the DB.
+        # Mutated in place too - a --watch loop reuses this same dict across
+        # iterations, so the next cycle's comparison must see this immediately.
         config["last_scan_sha"] = sha
         config["last_scan_dirty"] = dirty
 
-    # Mirrors workflow_trigger.trigger_workflow()'s own branches>1 check
-    # exactly (same config_branches() call) - so this always reflects
-    # whichever branch(es) that call actually decided to fan out to,
-    # rather than re-deciding it separately and risking drift.
+    # Mirrors trigger_workflow()'s own branches>1 check exactly, to avoid
+    # re-deciding it separately and risking drift.
     branches = config_branches(config)
     scanned_branches = branches if len(branches) > 1 else ([branch] if branch else [])
 

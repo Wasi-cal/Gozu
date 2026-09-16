@@ -45,22 +45,14 @@ class Finding(BaseModel):
     source_tool: str  # e.g. "sonarqube"
     branch: str | None = None  # scan branch, stamped by fetch_findings_activity
     # Rule-level "how to fix this" guidance (plain text, HTML stripped) -
-    # generic per rule (e.g. "use tempfile.NamedTemporaryFile instead"),
-    # never a fix tailored to this exact line/finding. None when the
-    # scanner has no such guidance for this rule, or none at all (e.g.
-    # a non-SonarQube scanner added later).
+    # generic per rule, never tailored to this exact line. None when the
+    # scanner has no such guidance.
     how_to_fix: str | None = None
-    # The scanner's own rule identifier (e.g. "python:S2068"), stamped by
-    # fetch_sonarqube_findings() - src/llm/enrich.py needs it to recognize
-    # hardcoded-credential rules and withhold the code snippet for those
-    # (see src/llm/enrich.py's _is_credential_rule()).
+    # The scanner's own rule identifier - src/llm/enrich.py needs it to
+    # recognize hardcoded-credential rules and withhold the code snippet.
     rule_key: str | None = None
-    # LLM-generated plain-English explanation + suggested fix, set by
-    # create_tickets_activity/github_action.main for a genuinely-new
-    # Blocker/Critical/High ticket only (see src/llm/enrich.py). None means
-    # "not generated" (no anthropic_api_key configured, non-eligible
-    # severity, or the call failed) - the ticket falls back to
-    # finding.message, exactly like before this field existed.
+    # LLM-generated explanation + suggested fix for a new Blocker/Critical/
+    # High ticket only. None means not generated - falls back to finding.message.
     llm_explanation: str | None = None
 
 
@@ -72,20 +64,14 @@ class CreatedTicket(BaseModel):
 class TicketResult(BaseModel):
     created: list[CreatedTicket] = []
     skipped: list[str] = []
-    # Findings that were new (no existing ticket) but didn't get one this
-    # run because create_tickets_activity's per-run backlog cap was
-    # already reached - distinct from `skipped`, which means "already
-    # ticketed", not "deferred". Rolled up into one shared ticket instead
-    # of one each - see JiraClient.upsert_rollup_ticket().
+    # New findings that didn't get a ticket this run (backlog cap reached),
+    # distinct from `skipped` ("already ticketed"). Rolled up into one
+    # shared ticket - see JiraClient.upsert_rollup_ticket().
     deferred: list[str] = []
-    # The shared rollup ticket's key, set by create_tickets_activity
-    # whenever `deferred` is non-empty and the ticket backend supports
-    # upsert_rollup_ticket() - None otherwise (no deferred findings, or
-    # the backend/attempt doesn't support it).
+    # The shared rollup ticket's key, set whenever `deferred` is non-empty
+    # and the backend supports upsert_rollup_ticket().
     rollup_ticket: str | None = None
-    # Ticket keys reconcile_resolved_findings_activity auto-closed this
-    # same run (src/temporal/workflows/scan_to_ticket.py) - attached onto this
-    # same TicketResult rather than a separate model, since this is
-    # already the one "what happened this run" result returned all the
-    # way out to the CLI (src/cli/report.py's end-of-run summary).
+    # Ticket keys reconcile_resolved_findings_activity auto-closed this run -
+    # attached here since this is the one "what happened" result returned
+    # out to the CLI.
     closed: list[str] = []

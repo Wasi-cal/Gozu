@@ -2,36 +2,23 @@
 # Author: Wasiullah Rafeeq S
 
 """
-Materializes the Docker stack (docker-compose.yml, Dockerfile,
-db/init_sonarqube_db.sql, alembic.ini + db/migrations/ - gozu's own schema
-migrations, see src/config/migrations.py - and the Python source tree the
-worker/receiver images build from) into ~/.gozu/stack/ - the directory
-every `docker compose` invocation in src/cli/stack/ runs against (see
-profiles.py, wipe.py, backup.py).
+Materializes the Docker stack (docker-compose.yml, Dockerfile, db/, and
+the Python source tree the worker/receiver images build from) into
+~/.gozu/stack/ - the directory every `docker compose` invocation in
+src/cli/stack/ runs against.
 
-This exists because a pip install has none of these on disk next to the
-installed package - only the `[project.scripts]` entry point and the
-Python source dirs listed in pyproject.toml's wheel `packages` land in
-site-packages. `docker-compose.yml`/`Dockerfile`/`db/` were never
-bundled as package data at all, and the worker/receiver images' `build: .`
-step needs a real source tree (pyproject.toml, uv.lock, and the packages
-COPY . . pulls in) to build from - none of which exists anywhere once
-gozu is installed from a wheel rather than run from a repo checkout.
+A pip install has none of this on disk next to the installed package -
+only the entry point and the packages listed in pyproject.toml's wheel
+`packages` land in site-packages, and the images' `build: .` step needs a
+real source tree to build from. `ensure_stack_files()` (called by `gozu
+init`) reads the bundled copies via importlib.resources and writes them
+into ~/.gozu/stack/, mirroring the repo-root layout.
 
-`ensure_stack_files()` is what `gozu init` calls to fix that: it reads the
-bundled copies (via importlib.resources - works whether installed from a
-wheel, an editable install, or a zipped package) and writes them into
-~/.gozu/stack/, mirroring the repo-root layout exactly so docker-compose.yml's
-`env_file: .env` and `build: .` keep resolving the same way they always
-did. It's a dedicated subdirectory, not flat under ~/.gozu/, deliberately -
-this repo has a `src/temporal/` source package, and ~/.gozu/ is also where a
-user may separately keep an unrelated `temporal` (the Temporal CLI binary,
-common enough as a standalone dev tool) - flattening the two would silently
-merge gozu's package files into a directory it doesn't own. `gozu up`/
-`down` only ever check that this already happened (require_initialized())
-- they don't materialize on their own, so a `gozu up` before any `gozu
-init` fails with a direct message instead of a confusing traceback about
-a missing .env.
+A dedicated subdirectory, not flat under ~/.gozu/, since a user may
+separately keep an unrelated `temporal` (the Temporal CLI binary) there -
+flattening would silently merge gozu's files into a directory it doesn't
+own. `gozu up`/`down` only check this already happened
+(require_initialized()); they never materialize on their own.
 """
 
 import importlib.resources
@@ -46,7 +33,7 @@ from scripts.paths import STACK_DIR
 _ASSETS_PACKAGE = "cli.stack._stackfiles"
 
 # Top-level files bundled verbatim under src/cli/stack/_stackfiles/ (see
-# pyproject.toml's [tool.hatch.build.targets.wheel `packages`]).
+# pyproject.toml's wheel `packages`).
 _STATIC_FILES = [
     "docker-compose.yml",
     "Dockerfile",
@@ -55,32 +42,18 @@ _STATIC_FILES = [
     "alembic.ini",
 ]
 
-# db/ (init_sonarqube_db.sql + db/migrations/, Alembic's revisions -
-# src/cli/stack/_stackfiles/db is a directory symlink to the real top-level
-# db/, confirmed live to survive a real `uv build --wheel` with full byte
-# content, not a broken link) is copied as a whole tree, like
-# _SOURCE_PACKAGES below, not enumerated file-by-file - a future Alembic
-# revision dropped into db/migrations/versions/ needs no change here at
-# all to reach ~/.gozu/stack/ once it's part of a new gozu release.
+# db/ is copied as a whole tree, like _SOURCE_PACKAGES below, so a future
+# Alembic revision needs no change here to reach ~/.gozu/stack/.
 #
-# db/migrations/, not db/alembic/, deliberately - confirmed live that a
-# directory literally named `alembic` at this same nesting depth gets
-# silently dropped from the wheel entirely by hatchling (every file
-# inside it, not just some), almost certainly a name collision with the
-# installed `alembic` PyPI package itself during hatchling's own file
-# resolution. alembic.ini (a single FILE, not a directory) is unaffected
-# and keeps its standard name - only the revisions directory needed
-# renaming, and `script_location` in alembic.ini (+ src/config/migrations.py's
-# override of it) points at "db/migrations" accordingly.
+# Named db/migrations/, not db/alembic/: a directory literally named
+# `alembic` at this nesting depth gets silently dropped from the wheel by
+# hatchling entirely, a name collision with the installed `alembic` PyPI
+# package. alembic.ini (a file, not a directory) is unaffected.
 _DIRECTORY_ASSETS = ["db"]
 
-# Every package the worker/receiver Docker images need on disk to build
-# (pyproject.toml's wheel `packages` list) - already installed wherever
-# gozu itself is installed, so these are copied from the running
-# installation, not from a second bundled copy. Written under src/ in
-# ~/.gozu/stack/ to mirror the repo-root layout exactly - pyproject.toml's
-# `packages` list (and the worker/receiver images' `COPY . .` + `uv sync`
-# step) expects each of these at src/<package>, not flat at the stack root.
+# Every package the worker/receiver images need on disk to build, copied
+# from the running installation (not a second bundled copy), under src/ to
+# mirror the repo-root layout pyproject.toml's `packages` expects.
 _SOURCE_PACKAGES = ["core", "scanner", "ticket", "temporal", "receiver", "cli", "scripts", "config", "llm"]
 
 _SKIP_DIR_NAMES = {"__pycache__", "_stackfiles"}

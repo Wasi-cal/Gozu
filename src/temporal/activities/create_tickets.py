@@ -24,23 +24,15 @@ from ticket.jira_client import (
     CUSTOM_FIELD_SEVERITY_NAME,
 )
 
-# Only a genuinely-new Blocker/Critical/High ticket gets an LLM call -
-# BLOCKER and CRITICAL both collapse to normalized Severity.CRITICAL (see
-# src/scanner/base.py's SONAR_SEVERITY_MAP), so this already covers "Blocker
-# and Critical" as two raw severities without a third normalized value.
+# BLOCKER and CRITICAL both collapse to Severity.CRITICAL (see
+# src/scanner/base.py's SONAR_SEVERITY_MAP), so this covers Blocker+Critical+High.
 _LLM_ELIGIBLE_SEVERITIES = (Severity.CRITICAL, Severity.HIGH)
 
 
 def _add_llm_explanation(finding: Finding, credentials: dict[str, str]) -> None:
-    """
-    Best-effort, same treatment as custom field discovery/rollup ticket
-    above - a failure here must never block ticket creation, and
-    finding.llm_explanation simply stays None (the ticket falls back to
-    finding.message). Called only once a finding has passed every
-    ledger/cap/claim/find_existing check and is genuinely about to get a
-    brand-new ticket - enriching earlier would waste an LLM call on every
-    already-ticketed Critical/High finding on every scan cycle, forever.
-    """
+    """Best-effort - a failure here must never block ticket creation.
+    Called only once a finding is genuinely about to get a new ticket, so
+    enrichment isn't wasted on already-ticketed findings every scan cycle."""
     if finding.severity not in _LLM_ELIGIBLE_SEVERITIES:
         return
     anthropic_key = credentials.get("anthropic_api_key")
@@ -52,50 +44,30 @@ def _add_llm_explanation(finding: Finding, credentials: dict[str, str]) -> None:
     except Exception as e:
         activity.logger.warning(f"LLM enrichment failed for finding {finding.key}: {e}")
 
-# Per-run cap on genuinely new tickets (Jira issue-create calls) - a named
-# constant, not a magic number, since a large one-off backlog (e.g. this
-# project's very first scan) would otherwise try to create hundreds of
-# tickets in one activity. Anything past this goes into one rollup ticket
-# instead (see JiraClient.upsert_rollup_ticket()) and is deliberately left
-# unclaimed, so a future run picks it back up as real cap headroom frees up.
-#
-# The FALLBACK default, not the only option anymore - input.ticket_cap
-# (configs.ticket_cap, db/migrations/versions/0008_add_ticket_cap.py, or a
-# --ticket-cap one-off override - see src/cli/scan_runner/__init__.py, which
-# resolves the two before this activity ever sees the result) overrides
-# this per-run when set; this constant only governs when neither was.
+# Per-run cap on new Jira issue-create calls, so a large one-off backlog
+# doesn't try to create hundreds of tickets at once - anything past this
+# goes into one rollup ticket instead and stays unclaimed for a future run.
+# Fallback default only; input.ticket_cap (configs.ticket_cap or a
+# --ticket-cap override) takes priority when set.
 BACKLOG_CAP = 30
 
 
 @activity.defn
 async def create_tickets_activity(input: CreateTicketsInput) -> TicketResult:
-    """
-    Dedupe is two-layered: src/ticket/claims.py's Postgres ledger atomically
+    """Dedupe is two-layered: src/ticket/claims.py's Postgres ledger atomically
     claims a (destination, finding_key) pair before anything talks to Jira,
-    closing the race where two overlapping runs (concurrent multi-branch
-    fan-out, an activity retry, two configs on the same project) could both
-    pass a plain "does a ticket exist yet" check before either creates one.
-    client.find_existing()'s label search is still used as a fallback for
-    tickets that predate the ledger or were created some other way.
-    """
+    closing the race between overlapping runs. client.find_existing()'s label
+    search is a fallback for tickets that predate the ledger."""
     client = (
         build_ticket_client(input.ticket_backend, input.credentials) if input.credentials else get_ticket_client()
     )
     destination = client.destination_id()
     ticket_exists = getattr(client, "ticket_exists", None)
 
-    # Once per activity execution, not once per ticket - the same Jira
-    # instance backs every ticket this run creates. Missing entirely on a
-    # backend without discover_custom_fields() (or if this Jira instance
-    # has neither optional field configured) -> empty dict, which
-    # create_ticket() already treats as "keep Component/Line in
-    # Description", identical to today's behavior. Same bonus/best-effort
-    # treatment as sprint assignment and the rollup-ticket upsert below -
-    # confirmed live that an unreachable/misconfigured Jira instance makes
-    # this a real RuntimeError, which (unwrapped) failed this entire
-    # activity before a single finding was even looked at, regardless of
-    # ticket_cap - a field-discovery outage must never be able to block
-    # ticket creation itself.
+    # Once per activity, not per ticket. Best-effort like sprint assignment
+    # and the rollup upsert below - a discovery outage must never block
+    # ticket creation; create_ticket() treats an empty dict as "keep
+    # Component/Line in Description".
     custom_fields = {}
     discover_custom_fields = getattr(client, "discover_custom_fields", None)
     if discover_custom_fields:
@@ -113,22 +85,15 @@ async def create_tickets_activity(input: CreateTicketsInput) -> TicketResult:
     deferred = []
     processed_new_count = 0
 
-    # One connection for the whole activity, not one per claims call per
-    # finding - see claims.get_connection(). Each mutating call still
-    # commits immediately (claim/record_ticket/release), so concurrent
-    # runs see each other's claims exactly as before; only the
-    # connect/auth/close overhead is no longer paid per finding.
+    # One connection for the whole activity; each mutating call still
+    # commits immediately, so concurrent runs see claims exactly as before.
     with claims.get_connection() as conn:
         for finding in input.findings:
             ledger_ticket = claims.get_ticket(conn, destination, finding.key)
             if ledger_ticket:
-                # The ledger's ticket_key is trusted blindly UNLESS the
-                # backend can cheaply confirm it's still real - a ticket
-                # deleted directly in Jira (outside gozu entirely) leaves
-                # this row pointing at nothing, permanently "skipping" a
-                # finding that in fact has no ticket at all. Verified
-                # False -> the claim is cleared and this finding falls
-                # through to the normal claim+create path below, same run.
+                # Trust the ledger unless the backend can cheaply confirm the
+                # ticket still exists - one deleted outside gozu falls through
+                # to the normal claim+create path below.
                 if ticket_exists is None or ticket_exists(ledger_ticket):
                     skipped.append(finding.key)
                     continue
@@ -139,11 +104,8 @@ async def create_tickets_activity(input: CreateTicketsInput) -> TicketResult:
                 claims.clear_stale(conn, destination, finding.key)
 
             if processed_new_count >= ticket_cap:
-                # Not claimed - this finding is genuinely untouched, so a
-                # future run (once earlier findings free up cap headroom,
-                # or just because this run's cap resets) reconsiders it
-                # from scratch instead of it being stuck "handled" with no
-                # real ticket to show for it.
+                # Not claimed, so a future run reconsiders it from scratch
+                # once cap headroom frees up.
                 deferred.append(finding.key)
                 continue
 
@@ -168,12 +130,9 @@ async def create_tickets_activity(input: CreateTicketsInput) -> TicketResult:
                 claims.release(conn, destination, finding.key)
                 raise
 
-    # Bonus, best-effort step, same treatment as sprint assignment in
-    # jira_client.py - a rollup-ticket failure must never fail the whole
-    # activity when every per-finding ticket above already succeeded.
-    # Always called, even with an empty `deferred`: that's what lets an
-    # existing rollup ticket's count shrink back to 0 as the backlog gets
-    # worked through, not just grow.
+    # Best-effort, same as sprint assignment in jira_client.py. Always
+    # called even with an empty `deferred`, so an existing rollup ticket's
+    # count can shrink back to 0, not just grow.
     rollup_ticket = None
     upsert_rollup_ticket = getattr(client, "upsert_rollup_ticket", None)
     if upsert_rollup_ticket:

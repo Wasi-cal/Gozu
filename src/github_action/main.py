@@ -15,19 +15,15 @@ Entrypoint for the standalone GitHub Action
 (.github/workflows/sonar-to-jira-main.yml): reacts to a push to main by
 waiting for SonarQube Cloud's Automatic Analysis to land, then creating
 Jira tickets for new findings - no Temporal, no Postgres, no gozu config
-store involved. Credentials come straight from GitHub Actions secrets via
-the environment, reusing the same env-reading factories
-(get_scanner_client/get_ticket_client) the webhook receiver's legacy path
-already provides - see src/scanner/factory.py and src/ticket/factory.py.
+store involved. Credentials come from GitHub Actions secrets via the
+environment, reusing the same env-reading factories the webhook
+receiver's legacy path provides.
 
-Dedupe is Jira's label search (find_existing) only, no ticket_claims
-ledger - this workflow triggers serially on push:branches:[main] with
-concurrency.cancel-in-progress: false, so the race that ledger exists to
-close barely applies here.
+Dedupe is Jira's label search only, no ticket_claims ledger - this
+workflow triggers serially with concurrency.cancel-in-progress: false.
 
-Runs before any Temporal workflow/activity context exists, same as
-src/receiver/app.py and src/temporal/worker.py - uses plain logging, not
-activity.logger/workflow.logger (see CLAUDE.md).
+Runs before any Temporal workflow/activity context exists - uses plain
+logging, not activity.logger/workflow.logger (see CLAUDE.md).
 """
 
 import asyncio
@@ -51,21 +47,13 @@ logger = logging.getLogger(__name__)
 
 _BRANCH = "main"
 
-# Same gate as src/temporal/activities/create_tickets.py's _add_llm_explanation -
-# see that module's comment for why BLOCKER/CRITICAL/MAJOR collapse to just
-# these two normalized values.
+# Same gate as create_tickets.py's _add_llm_explanation.
 _LLM_ELIGIBLE_SEVERITIES = (Severity.CRITICAL, Severity.HIGH)
 
 
 def _add_llm_explanation(finding: Finding, sonar_token: str) -> None:
-    """
-    Mirrors src/temporal/activities/create_tickets.py's _add_llm_explanation -
-    same eligibility/best-effort logic, but reading ANTHROPIC_API_KEY
-    straight from the environment (this entrypoint's credentials always
-    come from GitHub Actions secrets, never a config store) and logging via
-    the module's plain logger instead of activity.logger (see this file's
-    docstring on why - no Temporal context exists here).
-    """
+    """Mirrors create_tickets.py's _add_llm_explanation, but reads
+    ANTHROPIC_API_KEY from the environment and logs via the plain logger."""
     if finding.severity not in _LLM_ELIGIBLE_SEVERITIES:
         return
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -87,14 +75,9 @@ def _write_step_summary(text: str) -> None:
 
 
 async def _capture_and_attach(client, finding: Finding, ticket_key: str, sonar_token: str) -> None:
-    """
-    Mirrors src/temporal/activities/capture_and_attach_screenshot.py's
-    activity body - no Temporal context here. Two independent
-    best-effort pieces, not one all-or-nothing unit: the comment
-    (finding.message, nothing scraped) and the rendered-snippet
-    attachment - a snippet-rendering failure is logged clearly (which
-    finding, why) and doesn't prevent the comment or fail this entrypoint.
-    """
+    """Mirrors capture_and_attach_screenshot.py's activity body. Two
+    independent best-effort pieces: the comment and the snippet
+    attachment - a rendering failure doesn't prevent the comment."""
     add_comment = getattr(client, "add_comment", None)
     if add_comment is not None:
         add_comment(ticket_key, finding.message)
@@ -138,13 +121,9 @@ def main() -> None:
 
     scanner_client = get_scanner_client()
 
-    # wait_for_latest_analysis isn't part of the generic ScannerClient
-    # interface - like TicketClient's attach_screenshot/add_comment, it's a
-    # bonus capability only SonarQubeCloudClient provides, dispatched via
-    # getattr rather than called directly. Unlike those two, it's not
-    # actually optional for this entrypoint (which only ever targets Cloud
-    # via SCANNER_TYPE=sonarqube-cloud) - a missing method here means a
-    # real misconfiguration, so it's a hard failure, not a skip.
+    # Not part of the generic ScannerClient interface - only SonarQubeCloudClient
+    # provides it, but it's not optional here since this entrypoint only
+    # targets Cloud, so a missing method means a real misconfiguration.
     wait_for_latest_analysis = getattr(scanner_client, "wait_for_latest_analysis", None)
     if wait_for_latest_analysis is None:
         logger.error(

@@ -4,15 +4,12 @@
 # Depends on: PostgreSQL - data storage
 
 """
-Postgres-backed idempotency ledger for ticket creation - see
-db/migrations/versions/0004_add_ticket_claims.py's `ticket_claims` table for why
-this exists: it closes the check-then-act
-race in create_tickets_activity's old find_existing()-then-create_ticket()
-pattern, where two overlapping runs (concurrent multi-branch fan-out, an
-activity retry after a partial failure, or two configs pointed at the same
-project) could each see "no ticket yet" and each create one.
+Postgres-backed idempotency ledger for ticket creation - closes the
+check-then-act race in the old find_existing()-then-create_ticket()
+pattern, where two overlapping runs could each see "no ticket yet" and
+each create one.
 
-Not encrypted (src/config/crypto.py) - nothing here is a secret, just a
+Not encrypted - nothing here is a secret, just a
 destination+finding_key -> ticket_key mapping.
 """
 
@@ -29,14 +26,9 @@ _STALE_CLAIM_SECONDS = 300
 
 
 def get_connection() -> psycopg.Connection[dict[str, Any]]:
-    """
-    One connection is meant to be opened once per activity invocation and
-    passed into every claims call below - not one per call. A scan with N
-    new findings used to open up to 3N short-lived connections (get_ticket
-    + claim + record_ticket, each its own connect/auth/close) for what's
-    really one activity's worth of work; a single reused connection turns
-    that into a fixed, small number of round-trips.
-    """
+    """One connection opened once per activity invocation, passed into
+    every claims call below - not one per call, which used to open up to
+    3N short-lived connections for a scan with N findings."""
     return psycopg.Connection[dict[str, Any]].connect(
         host=os.environ["POSTGRES_HOST"],
         port=os.environ["POSTGRES_PORT"],
@@ -80,11 +72,8 @@ def claim(conn: psycopg.Connection[dict[str, Any]], destination: str, finding_ke
             (destination, finding_key),
         )
         won = cur.fetchone() is not None
-    # Committed immediately, not batched with the rest of this activity's
-    # loop - a concurrent claim() on the same finding relies on seeing this
-    # row (or not) right away. Held open across the whole loop instead,
-    # Postgres would just block that other claim() until this entire
-    # activity finished processing every finding, not just this one.
+    # Committed immediately, not batched - a concurrent claim() on the same
+    # finding needs to see this row right away, not block on the whole loop.
     conn.commit()
     return won
 
@@ -110,13 +99,9 @@ def release(conn: psycopg.Connection[dict[str, Any]], destination: str, finding_
 
 
 def list_open(conn: psycopg.Connection[dict[str, Any]], destination: str) -> list[dict[str, str]]:
-    """
-    Every claim on `destination` with a real ticket_key that hasn't been
-    marked closed yet - the candidates reconcile_resolved_findings_activity
-    batch-checks against the scanner each run. Excludes in-progress claims
-    (ticket_key IS NULL) - nothing to reconcile for a finding that doesn't
-    have a ticket yet.
-    """
+    """Every open claim on `destination` with a real ticket_key -
+    reconcile_resolved_findings_activity batch-checks these against the
+    scanner. Excludes in-progress claims with no ticket yet."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT finding_key, ticket_key FROM ticket_claims "
@@ -137,17 +122,10 @@ def mark_closed(conn: psycopg.Connection[dict[str, Any]], destination: str, find
 
 
 def clear_stale(conn: psycopg.Connection[dict[str, Any]], destination: str, finding_key: str) -> None:
-    """
-    Remove a claim whose ticket_key was verified to no longer exist in the
-    ticket backend (deleted directly there, outside gozu - see
-    create_tickets_activity's ticket_exists() check). Distinct from
-    release(): that one only ever clears an in-progress claim (ticket_key
-    IS NULL); this one is specifically for a *completed* claim whose
-    ticket has since vanished out from under the ledger, so it has no
-    ticket_key guard - deleting the row lets the very next claim() for
-    this finding succeed instead of permanently seeing a stale claim it
-    can never win past.
-    """
+    """Remove a claim whose ticket_key was verified to no longer exist in
+    the backend. Distinct from release(): that only clears an in-progress
+    claim; this is for a completed claim whose ticket has vanished, so it
+    has no ticket_key guard."""
     with conn.cursor() as cur:
         cur.execute(
             "DELETE FROM ticket_claims WHERE destination = %s AND finding_key = %s",

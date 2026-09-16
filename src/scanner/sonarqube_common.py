@@ -24,23 +24,16 @@ from scanner.html_text import strip_html
 from scanner.sonarqube_classify import FORMER_HOTSPOT_TAG, is_security_relevant
 
 # The descriptionSections key SonarQube uses for a rule's "how to fix"
-# guidance (confirmed live against /api/rules/show - see
-# src/scanner/html_text.py's Depends-on comment). Older SonarQube versions
-# return a single flat `htmlDesc` field instead of `descriptionSections`
-# at all - that case has no clean way to extract just "how to fix" out of
-# the whole rule writeup, so it's left as None rather than dumping the
-# entire htmlDesc into a ticket.
+# guidance. Older SonarQube returns a flat `htmlDesc` instead, with no
+# clean way to extract just this section - left as None in that case.
 _HOW_TO_FIX_SECTION_KEY = "how_to_fix"
 
 # SonarQube's documented max page size for issues/search.
 _PAGE_SIZE = 500
 
 # api/issues/search's classic `resolution` field - only present once an
-# issue has left OPEN/CONFIRMED/REOPENED. SonarSource's newer simplified
-# `issueStatus` model overlaps some of this (e.g. FALSE_POSITIVE), but
-# `resolution` (with this exact hyphenated spelling) is still returned
-# today for backward compatibility, same "old and new fields coexist"
-# situation as sonarqube_classify.py's type/impacts/tags triple-check.
+# issue has left OPEN/CONFIRMED/REOPENED. Still returned for backward
+# compatibility alongside the newer `issueStatus` model.
 _RESOLVED_RESOLUTIONS = {"FIXED", "REMOVED", "WONTFIX", "FALSE-POSITIVE"}
 
 
