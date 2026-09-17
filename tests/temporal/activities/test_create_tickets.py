@@ -171,15 +171,16 @@ def test_add_llm_explanation_skips_low_severity():
     mock_enrich.assert_not_called()
 
 
-def test_add_llm_explanation_skips_non_sonarqube_finding():
-    """enrich_finding()/scanner/screenshot.py's snippet fetch are SonarQube-specific - a Semgrep finding must skip cleanly."""
+def test_add_llm_explanation_enriches_non_sonarqube_finding_too():
+    """LLM enrichment isn't SonarQube-only - llm/enrich.py itself decides how to get a snippet per source_tool."""
     finding = make_finding("k1", severity=Severity.HIGH, source_tool="semgrep")
 
-    with patch(f"{MODULE}.enrich_finding") as mock_enrich:
+    with patch(f"{MODULE}.build_llm_client", return_value=MagicMock()), \
+         patch(f"{MODULE}.enrich_finding", return_value="Explanation") as mock_enrich:
         _add_llm_explanation(finding, {"anthropic_api_key": "sk-ant-..."})
 
-    mock_enrich.assert_not_called()
-    assert finding.llm_explanation is None
+    mock_enrich.assert_called_once()
+    assert finding.llm_explanation == "Explanation"
 
 
 def test_add_llm_explanation_skips_when_no_anthropic_key_configured():

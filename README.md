@@ -92,9 +92,10 @@ A few things work differently for a Semgrep config than for SonarQube:
   are deduped by a hash of the rule + file + line range, not a stable
   server-tracked id - moving code around (not just fixing it) can make a
   finding look "new" and leave its old ticket orphaned.
-- **No LLM explanation or code-snippet attachment.** Both features call
-  SonarQube's own source API today; a Semgrep finding still gets a ticket
-  with its own message, just without those two extras.
+- **LLM explanation and code-snippet attachment both work**, same as
+  SonarQube - the snippet is read straight off your checkout at scan time
+  (there's no server to fetch it from later), so it reflects whatever was
+  on disk when `gozu run` scanned it.
 - **No branches/multi-branch fan-out.** Each run scans whatever's
   currently checked out at `<path>`, same as SonarQube's local mode.
 

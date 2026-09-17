@@ -125,17 +125,14 @@ async def test_activity_propagates_real_add_comment_error():
         await capture_and_attach_screenshot_activity(make_input())
 
 
-async def test_activity_skips_snippet_rendering_for_non_sonarqube_finding_but_still_comments(caplog):
-    """render_finding_snippet() is SonarQube-specific (hard-calls /api/sources/lines) - a Semgrep finding must skip it cleanly."""
+async def test_activity_attaches_snippet_for_non_sonarqube_finding_too():
+    """render_finding_snippet() isn't SonarQube-only - a Semgrep finding with its own captured snippet still gets one."""
     client = MagicMock()
-    render_mock = MagicMock()
-    with patch(f"{MODULE}.render_finding_snippet", render_mock), patch(f"{MODULE}.get_ticket_client", return_value=client):
+    with patched_render(), patch(f"{MODULE}.get_ticket_client", return_value=client):
         await capture_and_attach_screenshot_activity(make_input(source_tool="semgrep"))
 
-    render_mock.assert_not_called()
-    client.attach_screenshot.assert_not_called()
+    client.attach_screenshot.assert_called_once()
     client.add_comment.assert_called_once_with("PROJ-1", "some message")
-    assert "not a SonarQube finding" in caplog.text
 
 
 async def test_activity_cleans_up_temp_dir_after_successful_attach():

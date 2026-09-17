@@ -20,9 +20,17 @@ temporal/activities/fetch_findings.py's `pre_fetched_findings` path).
 import hashlib
 import json
 import subprocess
+from pathlib import Path
 
 from core.models import Finding, Severity
 from scanner.base import DEFAULT_SEVERITY, ScannerClient, ScannerRequirements
+
+# Lines of context to read on each side of the flagged range, straight off
+# the host checkout - generous enough to serve both llm/enrich.py's prompt
+# (which wants more context than a rendered image strictly needs) and
+# scanner/screenshot.py's PNG render off the SAME captured window, rather
+# than reading the file twice with two different widths.
+_CONTEXT_LINES = 15
 
 # Confirmed live against semgrep-interfaces' semgrep_output_v1.jsonschema:
 # `extra.severity` covers both the classic ERROR/WARNING/INFO scale and the
@@ -57,6 +65,32 @@ def _stable_key(check_id: str, path: str, start_line: int, end_line: int) -> str
     return f"semgrep:{hashlib.sha256(raw.encode()).hexdigest()[:16]}"
 
 
+def _read_context_snippet(root: str, relative_path: str, start_line: int, end_line: int) -> tuple[str | None, int | None]:
+    """
+    Reads ±_CONTEXT_LINES of plain-text source around the flagged range
+    directly off the host checkout - the one moment this scanner has
+    filesystem access to it at all (see this module's own docstring). A
+    read failure (file since renamed/deleted between the match and this
+    read, permission issue, ...) returns (None, None) rather than raising -
+    a missing snippet must never fail the scan itself, same "best-effort,
+    never load-bearing" treatment SonarQube's own snippet fetch gets.
+    """
+    try:
+        lines = (Path(root) / relative_path).read_text(errors="replace").splitlines()
+    except OSError:
+        return None, None
+
+    if not lines:
+        return None, None
+
+    from_line = max(1, start_line - _CONTEXT_LINES)
+    to_line = min(len(lines), end_line + _CONTEXT_LINES)
+    if from_line > len(lines):
+        return None, None
+
+    return "\n".join(lines[from_line - 1 : to_line]), from_line
+
+
 class SemgrepLocalClient(ScannerClient):
     def fetch_findings(self, project_key: str, branch: str | None = None) -> list[Finding]:
         """
@@ -66,9 +100,16 @@ class SemgrepLocalClient(ScannerClient):
         `branch` is accepted only to satisfy the ScannerClient contract;
         Semgrep has no concept of it - the caller (fetch_findings_activity)
         stamps Finding.branch afterward, same as every other scanner.
+
+        Invoked with `cwd=project_key` and target "." (rather than passing
+        `project_key` as the scan target directly) so every result's own
+        `path` is reliably relative to `project_key` - needed to read the
+        flagged file back for its snippet (_read_context_snippet()) without
+        guessing how semgrep resolved a possibly-relative target itself.
         """
         result = subprocess.run(
-            ["semgrep", "scan", "--json", "--config", "auto", "--quiet", project_key],
+            ["semgrep", "scan", "--json", "--config", "auto", "--quiet", "."],
+            cwd=project_key,
             capture_output=True,
             text=True,
             check=False,
@@ -80,23 +121,30 @@ class SemgrepLocalClient(ScannerClient):
             raise RuntimeError(f"semgrep scan exited with status {result.returncode}: {result.stderr}")
 
         data = json.loads(result.stdout or "{}")
-        return [self._build_finding(raw) for raw in data.get("results", [])]
+        return [self._build_finding(raw, project_key) for raw in data.get("results", [])]
 
-    def _build_finding(self, raw: dict) -> Finding:
+    def _build_finding(self, raw: dict, root: str) -> Finding:
         check_id = raw.get("check_id", "")
         path = raw.get("path", "")
         start = raw.get("start", {})
         end = raw.get("end", {})
         start_line = start.get("line")
+        end_line = end.get("line", start_line)
         extra = raw.get("extra", {})
 
         fingerprint = extra.get("fingerprint")
         key = (
             f"semgrep:{fingerprint}"
             if fingerprint
-            else _stable_key(check_id, path, start_line or 0, end.get("line", start_line) or 0)
+            else _stable_key(check_id, path, start_line or 0, end_line or 0)
         )
         location = f"{path}:{start_line}" if start_line is not None else path
+
+        code_snippet, code_snippet_start_line = (
+            _read_context_snippet(root, path, start_line, end_line or start_line)
+            if start_line is not None
+            else (None, None)
+        )
 
         return Finding(
             key=key,
@@ -109,6 +157,8 @@ class SemgrepLocalClient(ScannerClient):
             deep_link=f"https://semgrep.dev/r/{check_id}" if check_id else "https://semgrep.dev",
             source_tool="semgrep",
             rule_key=check_id or None,
+            code_snippet=code_snippet,
+            code_snippet_start_line=code_snippet_start_line,
         )
 
     def _map_severity(self, raw_severity: str | None) -> Severity:

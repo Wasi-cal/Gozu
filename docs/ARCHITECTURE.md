@@ -369,11 +369,19 @@ which ticketing system sit behind it:
     when present (confirmed live: only populated when logged in to
     semgrep.dev, since Semgrep 1.98.0) or else a deterministic hash of
     `check_id|path|start_line|end_line`. `fetch_resolutions()` always
-    returns `{}` — see [Known limitations](#known-limitations).
+    returns `{}` — see [Known limitations](#known-limitations). Also
+    reads a snippet of source (`Finding.code_snippet`/
+    `code_snippet_start_line`) straight off the host checkout at scan
+    time (`_read_context_snippet()`) — the one moment this scanner has
+    filesystem access at all — so `llm/enrich.py` and
+    `scanner/screenshot.py` have something to work with later without
+    needing a remote API of their own.
 - **`scanner/screenshot.py`** — see the deep dive below. Not part of the
-  `ScannerClient` contract — it's a SonarQube-specific bonus capability
-  (source-lines API, `SONAR_TOKEN` auth), called directly by the
+  `ScannerClient` contract — a bonus capability called directly by the
   screenshot activity rather than through `get_scanner_client()`.
+  `render_finding_snippet()` prefers `finding.code_snippet` when a
+  scanner already captured one (local Semgrep); only a SonarQube finding
+  with none falls back to its live source-lines API call.
 
 #### The snippet-rendering story
 
@@ -384,9 +392,12 @@ source lines around the flagged line, rendered entirely server-side via
 earlier implementation drove headless Chromium via Playwright to
 screenshot SonarQube's own web UI (see git history before this rewrite
 if you need the old approach's own hard-won gotchas) — that whole
-approach is gone, not kept alongside this one. Two things worth
+approach is gone, not kept alongside this one. Everything below is about
+the SonarQube-specific fetch path (`fetch_snippet_lines()`); a finding
+that already carries `code_snippet` (local Semgrep) skips straight to the
+Pygments render and never hits any of this. Two things worth
 understanding because they're non-obvious and were confirmed live, not
-assumed, while building this:
+assumed, while building the SonarQube path:
 
 **1. SonarQube's `/api/sources/lines` returns HTML-marked-up code, not
 plain text.** Confirmed live against a real instance: the `code` field
@@ -823,12 +834,27 @@ webhook receiver route to need a global fallback for:
   enough to hash differently, creating a new ticket instead of matching
   the existing one — unlike SonarQube's server-tracked issue keys, which
   survive that.
-- **LLM enrichment and the screenshot/snippet PNG are SonarQube-only.**
+- **A local Semgrep finding's snippet is only as good as what was on disk
+  at scan time.** Unlike SonarQube (whose snippet is fetched live, from
+  whatever `create_tickets_activity`/`capture_and_attach_screenshot_activity`
+  see when they run), `scanner/semgrep_local.py` reads
+  `finding.code_snippet` off the host checkout once, during the scan
+  itself (`_read_context_snippet()`) — because that's the only moment this
+  scanner has filesystem access at all (see [`core/models.py` and the
+  scanner/ticket seam](#coremodelspy-and-the-scannerticket-seam)). Both
   `llm/enrich.py`'s `enrich_finding()` and `scanner/screenshot.py`'s
-  `render_finding_snippet()` both hard-call SonarQube's own
-  `/api/sources/lines` — `create_tickets_activity`/
-  `capture_and_attach_screenshot_activity` skip both cleanly for any
-  `finding.source_tool != "sonarqube"` rather than calling that API with
-  the wrong (or no) credentials. A Semgrep ticket still gets
-  `finding.message` as its description and a comment, just without an
-  LLM-generated explanation or an attached code-snippet image.
+  `render_finding_snippet()` use it directly when present, and never call
+  SonarQube's API for a non-SonarQube finding. If the file couldn't be
+  read at scan time (renamed/deleted mid-scan, permission issue),
+  `code_snippet` stays `None` — the ticket still gets its LLM explanation
+  and comment, just without a snippet in the prompt and without a
+  screenshot attachment (logged, not a failure).
+- **Semgrep's credential-rule guard is a keyword heuristic, not an exact
+  list.** Semgrep's Registry has no fixed prefix/suffix convention for
+  hardcoded-secret rules the way SonarQube's `:S2068`/`secrets:` do — 
+  `llm/enrich.py`'s `_is_credential_rule()` instead checks whether the
+  rule key contains `"secret"` or `"hardcoded"` (case-insensitive), which
+  covers every real Semgrep credential rule found while confirming this
+  (e.g. `generic.secrets.security.detected-*`,
+  `*.lang.security.audit.hardcoded-password-*`) without ever matching
+  SonarQube's own terse `language:S1234` rule keys.

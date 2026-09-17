@@ -5,7 +5,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from core.models import Severity
-from scanner.semgrep_local import SemgrepLocalClient, _stable_key
+from scanner.semgrep_local import SemgrepLocalClient, _read_context_snippet, _stable_key
 
 MODULE = "scanner.semgrep_local"
 
@@ -147,3 +147,47 @@ def test_requirements_needs_only_the_semgrep_binary():
 def test_fetch_resolutions_always_returns_empty_dict():
     """No auto-close for local Semgrep - reconciliation runs in the worker, which can't re-scan the host checkout."""
     assert SemgrepLocalClient().fetch_resolutions(["semgrep:abc", "semgrep:def"]) == {}
+
+
+# --- Code snippet capture: read host-side, since this is the one moment this scanner has filesystem access ---
+
+
+def test_fetch_findings_reads_code_snippet_from_the_real_scanned_file(tmp_path):
+    source = "\n".join(f"line {i}" for i in range(1, 31))  # 30 lines
+    (tmp_path / "app.py").write_text(source)
+    result = make_result(path="app.py", start_line=20, end_line=20)
+
+    with patch(f"{MODULE}.subprocess.run", return_value=mock_subprocess_run([result])):
+        findings = SemgrepLocalClient().fetch_findings(str(tmp_path))
+
+    finding = findings[0]
+    assert finding.code_snippet_start_line == 5  # 20 - 15 context lines
+    assert finding.code_snippet.splitlines()[0] == "line 5"
+    assert finding.code_snippet.splitlines()[-1] == "line 30"  # clamped to EOF (20 + 15 = 35 > 30 lines)
+
+
+def test_fetch_findings_leaves_code_snippet_none_when_file_is_missing(tmp_path):
+    result = make_result(path="does-not-exist.py")
+    with patch(f"{MODULE}.subprocess.run", return_value=mock_subprocess_run([result])):
+        findings = SemgrepLocalClient().fetch_findings(str(tmp_path))
+
+    assert findings[0].code_snippet is None
+    assert findings[0].code_snippet_start_line is None
+
+
+def test_read_context_snippet_clamps_to_line_1_near_the_top_of_the_file(tmp_path):
+    (tmp_path / "a.py").write_text("\n".join(f"line {i}" for i in range(1, 6)))  # 5 lines
+    snippet, from_line = _read_context_snippet(str(tmp_path), "a.py", start_line=2, end_line=2)
+    assert from_line == 1
+    assert snippet.splitlines() == ["line 1", "line 2", "line 3", "line 4", "line 5"]
+
+
+def test_read_context_snippet_clamps_to_eof(tmp_path):
+    (tmp_path / "a.py").write_text("\n".join(f"line {i}" for i in range(1, 6)))  # 5 lines
+    snippet, from_line = _read_context_snippet(str(tmp_path), "a.py", start_line=5, end_line=5)
+    assert from_line == 1  # 5 - 15 context lines, clamped
+    assert snippet.splitlines()[-1] == "line 5"
+
+
+def test_read_context_snippet_returns_none_for_a_missing_file(tmp_path):
+    assert _read_context_snippet(str(tmp_path), "missing.py", start_line=1, end_line=1) == (None, None)

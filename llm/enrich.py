@@ -15,12 +15,13 @@ API error, matching llm/factory.py's "let the caller decide" split.
 
 Credential-leak guard: a finding whose rule specifically flags hardcoded
 secrets (SonarQube's per-language "S2068 - Credentials should not be
-hard-coded" rule, or its dedicated `secrets:*` detection engine) means the
-flagged line itself IS the secret - the exact thing this feature must never
-forward to a third-party API. enrich_finding() withholds the code snippet
-entirely for those rules; it still sends the rule's own how_to_fix guidance
-and the finding's generic message, which describe the problem class without
-containing anyone's actual credential.
+hard-coded" rule, its dedicated `secrets:*` detection engine, or a Semgrep
+rule whose id names the same category - see _is_credential_rule()) means
+the flagged line itself IS the secret - the exact thing this feature must
+never forward to a third-party API. enrich_finding() withholds the code
+snippet entirely for those rules; it still sends the rule's own
+how_to_fix guidance and the finding's generic message, which describe the
+problem class without containing anyone's actual credential.
 """
 
 import anthropic
@@ -46,6 +47,17 @@ _MAX_TOKENS = 1024
 _CREDENTIAL_RULE_PREFIXES = ("secrets:",)
 _CREDENTIAL_RULE_SUFFIXES = (":S2068",)
 
+# Semgrep has no fixed prefix/suffix convention the way SonarQube's rule
+# keys do - its Registry names hardcoded-credential rules descriptively
+# instead (e.g. "generic.secrets.security.detected-generic-api-key...",
+# "python.lang.security.audit.hardcoded-password-string",
+# "javascript.lang.security.detect-hardcoded-secret"). A rule key never
+# contains either substring for SonarQube's own terse "language:S1234"
+# format, so this substring check only ever matches Semgrep findings in
+# practice - safe to apply unconditionally rather than branching on
+# finding.source_tool.
+_CREDENTIAL_RULE_KEYWORDS = ("secret", "hardcoded")
+
 _SYSTEM_PROMPT = (
     "You write short, plain-English explanations for Jira tickets created from "
     "SonarQube findings. Given a rule's own guidance and (when available) the "
@@ -59,7 +71,10 @@ _SYSTEM_PROMPT = (
 def _is_credential_rule(rule_key: str | None) -> bool:
     if not rule_key:
         return False
-    return rule_key.startswith(_CREDENTIAL_RULE_PREFIXES) or rule_key.endswith(_CREDENTIAL_RULE_SUFFIXES)
+    if rule_key.startswith(_CREDENTIAL_RULE_PREFIXES) or rule_key.endswith(_CREDENTIAL_RULE_SUFFIXES):
+        return True
+    lowered = rule_key.lower()
+    return any(keyword in lowered for keyword in _CREDENTIAL_RULE_KEYWORDS)
 
 
 # Default "no snippet" note - deliberately vague (a fetch failure, e.g. a
@@ -109,13 +124,26 @@ def generate_explanation(
 
 def enrich_finding(client: anthropic.Anthropic, finding: Finding, sonar_token: str) -> str:
     """
-    Fetches the code snippet (unless withheld per _is_credential_rule()) and
-    generates the explanation. A snippet-fetch failure (e.g. the source file
-    was since deleted/renamed) falls back to no snippet rather than failing
+    Gets the code snippet (unless withheld per _is_credential_rule()) and
+    generates the explanation. A finding whose scanner already captured
+    its own snippet host-side (finding.code_snippet - e.g. local Semgrep,
+    which has no remote API this could fetch from later) uses that
+    directly; only a SonarQube finding with none falls back to fetching
+    one live. A snippet-fetch failure there (e.g. the source file was
+    since deleted/renamed) falls back to no snippet rather than failing
     enrichment outright - the rule guidance + message alone are still useful.
     """
     if _is_credential_rule(finding.rule_key):
         return generate_explanation(client, finding, None, _CREDENTIAL_SNIPPET_WITHHELD_NOTE)
+
+    if finding.code_snippet is not None:
+        return generate_explanation(client, finding, finding.code_snippet)
+
+    if finding.source_tool != "sonarqube":
+        # No pre-captured snippet and no remote source API to fetch one
+        # from - proceed without a snippet rather than calling SonarQube's
+        # API against a finding that was never SonarQube's.
+        return generate_explanation(client, finding, None)
 
     try:
         lines, _ = fetch_snippet_lines(finding, sonar_token, LLM_CONTEXT_LINES)
