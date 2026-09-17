@@ -48,6 +48,15 @@ async def capture_and_attach_screenshot_activity(input: ScreenshotAttachInput) -
         )
         return
 
+    if finding.source_tool != "sonarqube":
+        # scanner/screenshot.py's render_finding_snippet() hard-calls
+        # SonarQube's own /api/sources/lines - it has no equivalent for any
+        # other scanner yet. Skipped cleanly (the comment above already
+        # posted regardless) rather than calling that API with the wrong
+        # (or no) credentials. See docs/ARCHITECTURE.md's Known limitations.
+        activity.logger.warning(f"Skipping snippet attachment for {input.ticket_key}: not a SonarQube finding")
+        return
+
     token = input.credentials.get("sonar_token", os.environ.get("SONAR_TOKEN", ""))
     try:
         png_bytes = render_finding_snippet(finding, token)

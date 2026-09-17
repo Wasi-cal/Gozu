@@ -27,7 +27,7 @@ def jira_env(monkeypatch):
     monkeypatch.setenv("JIRA_PROJECT_KEY", "PROJ")
 
 
-def make_input() -> ScreenshotAttachInput:
+def make_input(source_tool: str = "sonarqube") -> ScreenshotAttachInput:
     return ScreenshotAttachInput(
         finding=Finding(
             key="ABC-1",
@@ -38,7 +38,7 @@ def make_input() -> ScreenshotAttachInput:
             message="some message",
             finding_type="vulnerability",
             deep_link="http://localhost:9090/project/issues?id=proj",
-            source_tool="sonarqube",
+            source_tool=source_tool,
         ),
         ticket_key="PROJ-1",
     )
@@ -123,6 +123,19 @@ async def test_activity_propagates_real_add_comment_error():
         RuntimeError, match="jira down"
     ):
         await capture_and_attach_screenshot_activity(make_input())
+
+
+async def test_activity_skips_snippet_rendering_for_non_sonarqube_finding_but_still_comments(caplog):
+    """render_finding_snippet() is SonarQube-specific (hard-calls /api/sources/lines) - a Semgrep finding must skip it cleanly."""
+    client = MagicMock()
+    render_mock = MagicMock()
+    with patch(f"{MODULE}.render_finding_snippet", render_mock), patch(f"{MODULE}.get_ticket_client", return_value=client):
+        await capture_and_attach_screenshot_activity(make_input(source_tool="semgrep"))
+
+    render_mock.assert_not_called()
+    client.attach_screenshot.assert_not_called()
+    client.add_comment.assert_called_once_with("PROJ-1", "some message")
+    assert "not a SonarQube finding" in caplog.text
 
 
 async def test_activity_cleans_up_temp_dir_after_successful_attach():

@@ -43,6 +43,14 @@ def _add_llm_explanation(finding: Finding, credentials: dict[str, str]) -> None:
     """
     if finding.severity not in _LLM_ELIGIBLE_SEVERITIES:
         return
+    if finding.source_tool != "sonarqube":
+        # llm/enrich.py's enrich_finding() hard-calls SonarQube's own
+        # /api/sources/lines to fetch the flagged code snippet - it has no
+        # equivalent for any other scanner yet. Skipped cleanly rather than
+        # calling that API with the wrong (or no) credentials; the ticket
+        # still gets finding.message as its description, same as before
+        # this feature existed. See docs/ARCHITECTURE.md's Known limitations.
+        return
     anthropic_key = credentials.get("anthropic_api_key")
     if not anthropic_key:
         return

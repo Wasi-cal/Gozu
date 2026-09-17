@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
 # Depends on: temporal/data_converter.py - the Pydantic-aware data converter and task queue name
@@ -17,7 +18,7 @@ import uuid
 from temporalio.client import Client
 
 from cli.scan_runner.config_fields import config_branches
-from core.models import TicketResult
+from core.models import Finding, TicketResult
 from temporal.data_converter import DATA_CONVERTER, TASK_QUEUE
 from temporal.models.reconcile_resolved_findings import ReconcileResolvedFindingsInput
 from temporal.models.sonar_to_jira import SonarToJiraInput
@@ -32,6 +33,7 @@ async def trigger_workflow(
     branch: str | None,
     display_branch: str | None,
     ticket_cap: int | None = None,
+    pre_fetched_findings: list[Finding] | None = None,
 ) -> TicketResult:
     """
     Connects to the *host*-visible Temporal address (localhost:{TEMPORAL_PORT})
@@ -44,6 +46,10 @@ async def trigger_workflow(
     specific config instead of falling back to the worker's own global
     env vars (which is what the webhook receiver's SonarToJiraInput -
     lacking these fields - still does).
+
+    `pre_fetched_findings` (local Semgrep only - see
+    cli/scan_runner/semgrep_exec.py) skips fetch_findings_activity's own
+    scanner-client call entirely; every other caller leaves it None.
 
     workflow_id is deterministic per SonarQube analysis (ceTaskId is unique
     per actual compute-engine task), the same idempotency pattern the old
@@ -67,6 +73,7 @@ async def trigger_workflow(
         branch=branch,
         display_branch=display_branch,
         ticket_cap=ticket_cap,
+        pre_fetched_findings=pre_fetched_findings,
     )
     workflow_id = f"sonar-jira-{ce_task_id}"
 

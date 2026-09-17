@@ -352,6 +352,24 @@ which ticketing system sit behind it:
     (`scanner/sonarqube_common.py`), so the fetch/classify behavior
     described in [Walking through one request](#walking-through-one-request)
     applies to either one identically.
+  - `SemgrepLocalClient` (`scanner/semgrep_local.py`) — the local,
+    open-source `semgrep` CLI, no semgrep.dev account. Structurally
+    different from the two above: SonarQube's clients query a *remote
+    server* that already has results, computed elsewhere, whereas Semgrep
+    OSS has no server at all — `fetch_findings()` runs `semgrep scan
+    --json --config auto <path>` itself, synchronously, so `project_key`
+    means "the path to scan" for this client, not a server-registered
+    identifier. Since the Temporal worker container has no access to the
+    user's host checkout, this client is only ever invoked host-side
+    (`cli/scan_runner/semgrep_exec.py`), never from inside an activity —
+    its findings are threaded straight into `SonarToJiraInput.pre_fetched_findings`
+    instead, and `fetch_findings_activity` returns them as-is when that's
+    set, skipping `build_scanner_client()`/`fetch_findings()` inside the
+    worker entirely for this scanner_type. Dedup key is `extra.fingerprint`
+    when present (confirmed live: only populated when logged in to
+    semgrep.dev, since Semgrep 1.98.0) or else a deterministic hash of
+    `check_id|path|start_line|end_line`. `fetch_resolutions()` always
+    returns `{}` — see [Known limitations](#known-limitations).
 - **`scanner/screenshot.py`** — see the deep dive below. Not part of the
   `ScannerClient` contract — it's a SonarQube-specific bonus capability
   (source-lines API, `SONAR_TOKEN` auth), called directly by the
@@ -753,7 +771,9 @@ still exists as a legacy fallback for contexts with no per-config
 credentials of their own (the webhook receiver's oldest code path, and
 now also the standalone GitHub Action, which deliberately has no
 Postgres/config-store at all and reads these directly from GitHub Actions
-secrets instead):
+secrets instead) — this legacy path is SonarQube-only; a local Semgrep
+config always goes through the normal config-store path, since it has no
+webhook receiver route to need a global fallback for:
 
 | Variable | Read by | Purpose |
 |---|---|---|
@@ -790,3 +810,25 @@ secrets instead):
   the only ticket client that exists — the pattern is there for when
   (if) a second backend is added, not because it currently does
   anything at runtime.
+- **Local Semgrep tickets never auto-close.** `SemgrepLocalClient.fetch_resolutions()`
+  always returns `{}` — `reconcile_resolved_findings_activity` runs inside
+  the Temporal worker, which has no access to the host checkout a Semgrep
+  scan needs to re-run against. A resolved Semgrep finding's ticket has
+  to be closed manually.
+- **Local Semgrep's dedup key can miss on a refactor.** Without a
+  semgrep.dev login, `extra.fingerprint` is never present (confirmed live
+  against semgrep-interfaces' schema — required since Semgrep 1.98.0), so
+  `SemgrepLocalClient` falls back to hashing `check_id|path|start_line|end_line`.
+  Code moving (not just changing) can shift a finding's line numbers
+  enough to hash differently, creating a new ticket instead of matching
+  the existing one — unlike SonarQube's server-tracked issue keys, which
+  survive that.
+- **LLM enrichment and the screenshot/snippet PNG are SonarQube-only.**
+  `llm/enrich.py`'s `enrich_finding()` and `scanner/screenshot.py`'s
+  `render_finding_snippet()` both hard-call SonarQube's own
+  `/api/sources/lines` — `create_tickets_activity`/
+  `capture_and_attach_screenshot_activity` skip both cleanly for any
+  `finding.source_tool != "sonarqube"` rather than calling that API with
+  the wrong (or no) credentials. A Semgrep ticket still gets
+  `finding.message` as its description and a comment, just without an
+  LLM-generated explanation or an attached code-snippet image.

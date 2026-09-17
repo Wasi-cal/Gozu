@@ -1,15 +1,16 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
 #
-# Depends on: cli/prerequisites/__init__.py - ensuring Java/sonar-scanner are installed
+# Depends on: cli/prerequisites/__init__.py - ensuring Java/sonar-scanner/semgrep are installed
 # Depends on: scripts/bootstrap_env.py - writing/loading .env fields and resolving ports
 
-"""Step 1-2 of the init wizard: .env bootstrap and Java prerequisite check."""
+"""Step 1-2 of the init wizard: .env bootstrap and scanner prerequisite check."""
 
 import questionary
 import typer
 
-from cli.prerequisites import ensure_java, ensure_sonar_scanner
+from cli.prerequisites import ensure_java, ensure_semgrep, ensure_sonar_scanner
 from cli.prompts import ask_or_exit
 from cli.status import error, waiting
 from scripts.bootstrap_env import (
@@ -57,17 +58,23 @@ def step_bootstrap_env() -> None:
     load_into_environ()
 
 
-def step_ensure_prerequisites() -> None:
+def step_ensure_prerequisites(scanner_type: str) -> None:
     """
-    Both Local and Cloud configs run sonar-scanner on THIS host - Cloud
-    only means the scan target is SonarQube Cloud instead of a local
+    Both Local and Cloud SonarQube configs run sonar-scanner on THIS host -
+    Cloud only means the scan target is SonarQube Cloud instead of a local
     instance, the CLI tool doing the scanning is the same either way (see
     cli/scan_runner/scanner_exec.py's _build_scanner_command(), which
     calls ensure_sonar_scanner() unconditionally for both scanner_modes).
-    Resolving both here means neither is ever a surprise download during
-    someone's first `gozu run` - run_scan_cycle()'s own calls to these
-    stay in place too, as a defensive, idempotent fallback.
+    Local Semgrep needs only the `semgrep` binary itself - no JVM, no
+    server. Resolving whichever is needed here means it's never a surprise
+    download during someone's first `gozu run` - run_scan_cycle()'s own
+    calls to these stay in place too, as a defensive, idempotent fallback.
     """
+    if scanner_type == "semgrep":
+        waiting("Checking prerequisites (semgrep) ...")
+        ensure_semgrep()
+        return
+
     waiting("Checking prerequisites (Java, sonar-scanner) ...")
     ensure_java()
     ensure_sonar_scanner()
