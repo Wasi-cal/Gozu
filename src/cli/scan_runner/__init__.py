@@ -3,8 +3,9 @@
 # Editor: Prakrit Mohanty
 #
 # Depends on: src/config/store.py - persisting last-scan git state back to the config
-# Depends on: src/cli/prerequisites/__init__.py - ensuring Java/sonar-scanner/trivy are installed before scanning
+# Depends on: src/cli/prerequisites/__init__.py - ensuring Java/sonar-scanner/trivy/semgrep are installed before scanning
 # Depends on: src/scanner/trivy_client.py - runs the host-side trivy fs scan directly
+# Depends on: src/cli/scan_runner/semgrep_exec.py - runs the host-side local semgrep scan directly
 
 """
 `gozu run`'s actual logic: pick a config, run the config's scanner, wait for
@@ -15,7 +16,7 @@ directly - no webhook involved.
 import asyncio
 
 import config.store as config_store
-from cli.prerequisites import ensure_java, ensure_sonar_scanner, ensure_trivy
+from cli.prerequisites import ensure_java, ensure_semgrep, ensure_sonar_scanner, ensure_trivy
 from cli.scan_runner.config_fields import config_branches, scanner_host_url
 from cli.scan_runner.config_select import select_config
 from cli.scan_runner.scanner_exec import (
@@ -25,6 +26,7 @@ from cli.scan_runner.scanner_exec import (
     run_scanner,
     wait_for_analysis,
 )
+from cli.scan_runner.semgrep_exec import run_semgrep_local_scan
 from cli.scan_runner.workflow_trigger import trigger_reconcile_only, trigger_workflow
 from cli.status import waiting, warning
 from core.models import TicketResult
@@ -73,6 +75,8 @@ def run_scan_cycle(
 
     if config["scanner_type"] == "trivy":
         ce_task_id, scanned_branches, ticket_result = _run_trivy_scan_cycle(config, path, effective_ticket_cap)
+    elif config["scanner_type"] == "semgrep":
+        ce_task_id, scanned_branches, ticket_result = _run_semgrep_scan_cycle(config, path, effective_ticket_cap)
     else:
         ce_task_id, scanned_branches, ticket_result = _run_sonarqube_scan_cycle(config, path, effective_ticket_cap)
 
@@ -157,3 +161,37 @@ def _run_trivy_scan_cycle(
     )
 
     return f"(trivy fs - {len(findings)} finding(s))", [], ticket_result
+
+
+def _run_semgrep_scan_cycle(
+    config: dict, path: str, effective_ticket_cap: int | None
+) -> tuple[str, list[str], TicketResult]:
+    """
+    Local Semgrep's scan is a single synchronous subprocess call, run
+    HOST-SIDE in this process - same "no ceTaskId, no server-side wait"
+    shape as Trivy. Unlike Trivy, Semgrep findings DO carry a real git
+    branch (this scans an actual checkout) - that's stamped by
+    fetch_findings_activity, not here, since pre_fetched_findings still
+    routes through that activity for Semgrep (see workflow_trigger.py's
+    trigger_workflow() docstring for why Trivy and Semgrep differ here).
+    """
+    ensure_semgrep()
+
+    display_branch = detect_git_branch(path)
+
+    waiting(f"Running semgrep against {path} ...")
+    findings = run_semgrep_local_scan(path, display_branch)
+    waiting(f"semgrep finished - {len(findings)} finding(s); triggering ScanToTicketWorkflow ...")
+
+    ticket_result = asyncio.run(
+        trigger_workflow(
+            config,
+            ce_task_id=None,
+            branch=None,
+            display_branch=display_branch,
+            ticket_cap=effective_ticket_cap,
+            pre_fetched_findings=findings,
+        )
+    )
+
+    return f"(semgrep - {len(findings)} finding(s))", [], ticket_result

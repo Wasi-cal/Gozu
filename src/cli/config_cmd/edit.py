@@ -30,6 +30,7 @@ from cli.init_wizard.jira_step import (
     prompt_jira_url,
 )
 from cli.init_wizard.llm_step import prompt_anthropic_api_key
+from cli.init_wizard.semgrep_step import prompt_project_label
 from cli.init_wizard.sonar_cloud import (
     prompt_premium_branches,
     prompt_sonar_organization,
@@ -80,7 +81,20 @@ def _build_edit_fields(config: dict, state: dict) -> list[WizardField]:
     trigger_mode = config["trigger_mode"]
 
     state["ticket_cap"] = config.get("ticket_cap")
+    project_key_field = (
+        None
+        if scanner_type == "trivy"
+        # No project_key, no credentials, no branches at all - see
+        # src/cli/init_wizard/__init__.py's _build_fields() Trivy branch
+        # for why. Only ticket_cap and the shared Jira fields below apply.
+        else WizardField("project_key", "Project label", lambda: prompt_project_label(state.get("project_key", "")))
+        if scanner_type == "semgrep"
+        else WizardField(
+            "project_key", "SonarQube project key", lambda: prompt_project_key(state.get("project_key", ""))
+        )
+    )
     fields = [
+        *([project_key_field] if project_key_field is not None else []),
         WizardField(
             "ticket_cap",
             "Per-run ticket cap (blank = default)",
@@ -88,16 +102,12 @@ def _build_edit_fields(config: dict, state: dict) -> list[WizardField]:
         ),
     ]
 
-    if scanner_type == "trivy":
-        # No project_key, no credentials, no branches at all - see
-        # cli/init_wizard/__init__.py's _build_fields() Trivy branch for
-        # why. Only ticket_cap and the shared Jira fields below apply.
-        pass
-    elif scanner_mode == "local":
+    if project_key_field is not None:
         state["project_key"] = config.get("project_key") or ""
-        fields.append(
-            WizardField("project_key", "SonarQube project key", lambda: prompt_project_key(state.get("project_key", "")))
-        )
+
+    if scanner_type in ("trivy", "semgrep"):
+        pass  # no scanner credentials to edit - trivy needs none, semgrep's trigger_mode "direct" needs none
+    elif scanner_mode == "local":
         state["sonar_token"] = credentials.get("sonar_token", "")
         state["sonar_host_url"] = credentials.get("sonar_host_url", "")
         fields += [
@@ -111,10 +121,6 @@ def _build_edit_fields(config: dict, state: dict) -> list[WizardField]:
             ),
         ]
     else:
-        state["project_key"] = config.get("project_key") or ""
-        fields.append(
-            WizardField("project_key", "SonarQube project key", lambda: prompt_project_key(state.get("project_key", "")))
-        )
         state["sonar_token"] = credentials.get("sonar_token", "")
         state["sonar_organization"] = credentials.get("sonar_organization", "")
         state["branches"] = config.get("branches") or ""

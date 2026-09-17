@@ -3,11 +3,11 @@
 Scans your code with a pluggable choice of scanners and automatically
 creates tickets in a pluggable choice of ticket-tracking backends for the
 vulnerabilities/hotspots it finds - orchestrated with [Temporal](https://temporal.io)
-so scans, dedupe, and ticket creation survive crashes/retries. SonarQube
-(scanner) and Jira (ticket backend) are the currently supported
-implementations - the rest of this doc describes gozu in terms of those,
-since they're what's actually implemented today, not a limit on the
-architecture.
+so scans, dedupe, and ticket creation survive crashes/retries. SonarQube,
+Trivy, and Semgrep (scanners) and Jira (ticket backend) are the currently
+supported implementations - the rest of this doc describes gozu in terms
+of those, since they're what's actually implemented today, not a limit on
+the architecture.
 
 Working name for the CLI/product; the repo directory is still called
 `sonar-to-jira`.
@@ -68,7 +68,7 @@ Three ways, chosen per-config during `gozu init`:
 
 | Mode | When it's used | How it works |
 |---|---|---|
-| `direct` | Self-hosted SonarQube, run on demand | `gozu run` runs sonar-scanner, waits for SonarQube to finish, then creates tickets |
+| `direct` | Local Semgrep | `gozu run` runs `semgrep scan` synchronously right there on the host and creates tickets immediately - no webhook, no server component at all (see "Semgrep (local)" below) |
 | `watch` | SonarQube Cloud **Free** plan | Free only analyzes PRs after merge to main - there's no webhook to receive, so `gozu run --watch` polls on an interval instead |
 | `webhook` | Self-hosted SonarQube, or SonarQube Cloud **Premium** | SonarQube calls `src/receiver/app.py` as soon as its own analysis finishes; Premium can track several branches (with pattern support, e.g. `release/*`), each webhook gated against that list |
 
@@ -77,6 +77,31 @@ starts one child workflow per branch under a parent
 (`MultiBranchScanWorkflow`), visible in the Temporal UI as a parent with
 child workflows. A webhook delivery only ever concerns one branch, so it
 never needs to fan out - the branch list just gates which deliveries proceed.
+
+### Semgrep (local)
+
+`gozu init` can also set up a **local Semgrep** config - the open-source
+`semgrep` CLI, no semgrep.dev account needed. `gozu init` installs it via
+`uv tool install semgrep` if it isn't already on your PATH. Unlike
+SonarQube, there's no server: `gozu run -p <path>` runs `semgrep scan
+--config auto` directly against `<path>` and creates tickets from the
+result in the same step (`trigger_mode = direct`) - no webhook, no
+Postgres-backed server to bring up for it.
+
+A few things work differently for a Semgrep config than for SonarQube:
+- **No auto-close.** Reconciliation runs inside the Temporal worker, which
+  never has access to your host checkout to re-scan it - a Semgrep
+  finding's ticket only ever closes manually.
+- **Dedup can miss on refactors.** Without a semgrep.dev login, findings
+  are deduped by a hash of the rule + file + line range, not a stable
+  server-tracked id - moving code around (not just fixing it) can make a
+  finding look "new" and leave its old ticket orphaned.
+- **LLM explanation and code-snippet attachment both work**, same as
+  SonarQube - the snippet is read straight off your checkout at scan time
+  (there's no server to fetch it from later), so it reflects whatever was
+  on disk when `gozu run` scanned it.
+- **No branches/multi-branch fan-out.** Each run scans whatever's
+  currently checked out at `<path>`, same as SonarQube's local mode.
 
 ## What's in a ticket
 
@@ -233,7 +258,7 @@ src/cli/                    the `gozu` CLI (typer)
   main.py                 entrypoint: init / run / up / down
   init_wizard/             `gozu init` wizard, one file per step
   scan_runner/             `gozu run`: scan, poll, trigger workflow
-  prerequisites/           downloading/verifying Java + sonar-scanner
+  prerequisites/           downloading/verifying Java + sonar-scanner, or installing semgrep
   help_links.py            credential help-link lookup
   stack/                   `gozu up`/`down` (+ `--wipe`), Compose profile detection
 
@@ -247,6 +272,7 @@ src/scanner/                scanner backends
   base.py                  ScannerClient interface + shared constants
   sonarqube_server.py       self-hosted SonarQube
   sonarqube_cloud.py        SonarQube Cloud (stub)
+  semgrep_local.py          local, open-source Semgrep CLI
   factory.py                build_scanner_client() / get_scanner_client()
   screenshot.py            Pygments: renders a syntax-highlighted source snippet PNG
 
@@ -289,8 +315,18 @@ To add a backend:
 2. Register it in that package's `factory.py`.
 3. If it's a scanner, add it to `src/scanner/base.py`'s `SCANNER_REGISTRY` so the init wizard can offer it.
 
-Nothing else in the codebase needs to change - workflows, activities, and
-the receiver only ever talk to the abstract interface.
+That's the whole story for a scanner that queries a remote server for
+results computed elsewhere (SonarQube's own model - `fetch_findings()` is
+the only thing that ever gets called, from inside the Temporal worker).
+A scanner with no server of its own, like local Semgrep
+(`scanner/semgrep_local.py`), has to actually run *on the host* instead -
+the worker container has no access to your checkout - so its findings are
+computed by `cli/scan_runner/` and threaded into the workflow input
+(`SonarToJiraInput.pre_fetched_findings`) rather than fetched by the
+worker; `temporal/activities/fetch_findings.py` returns them as-is when
+that's set, skipping the scanner client entirely. See
+`cli/scan_runner/semgrep_exec.py` for the pattern to follow for a similar
+future backend.
 
 ## Configuration model
 

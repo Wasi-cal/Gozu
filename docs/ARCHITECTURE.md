@@ -355,10 +355,50 @@ which ticketing system sit behind it:
     (`src/scanner/sonarqube_common.py`), so the fetch/classify behavior
     described in [Walking through one request](#walking-through-one-request)
     applies to either one identically.
+  - `TrivyClient` (`src/scanner/trivy_client.py`) — wraps the local `trivy`
+    binary in `fs` mode (`trivy fs --format json <path>`), synchronously,
+    same shape as Semgrep below: no remote server, `project_key` means
+    "the path to scan," only ever invoked host-side
+    (`src/cli/scan_runner/__init__.py`'s `_run_trivy_scan_cycle()`), and
+    its findings thread straight into
+    `SonarToJiraInput.pre_fetched_findings` — but unlike Semgrep, the
+    workflow skips `fetch_findings_activity` entirely for Trivy rather
+    than routing through it, since Trivy findings have no branch concept
+    to stamp (a package-manifest scan, not a git checkout). Also
+    package-level, not file/line-level: `fetch_resolutions()` always
+    returns `{}`, and there's no source snippet for the screenshot/LLM
+    paths to use — see [Known limitations](#known-limitations).
+  - `SemgrepLocalClient` (`src/scanner/semgrep_local.py`) — the local,
+    open-source `semgrep` CLI, no semgrep.dev account. Structurally
+    different from SonarQube's clients: SonarQube's clients query a
+    *remote server* that already has results, computed elsewhere, whereas
+    Semgrep OSS has no server at all — `fetch_findings()` runs `semgrep
+    scan --json --config auto <path>` itself, synchronously, so
+    `project_key` means "the path to scan" for this client, not a
+    server-registered identifier. Since the Temporal worker container has
+    no access to the user's host checkout, this client is only ever
+    invoked host-side (`src/cli/scan_runner/semgrep_exec.py`), never from
+    inside an activity — its findings are threaded straight into
+    `SonarToJiraInput.pre_fetched_findings` instead, and (unlike Trivy)
+    `fetch_findings_activity` still runs and returns them as-is when
+    that's set, so branch-stamping stays common to every scanner rather
+    than duplicated per scanner_type. Dedup key is `extra.fingerprint`
+    when present (confirmed live: only populated when logged in to
+    semgrep.dev, since Semgrep 1.98.0) or else a deterministic hash of
+    `check_id|path|start_line|end_line`. `fetch_resolutions()` always
+    returns `{}` — see [Known limitations](#known-limitations). Also
+    reads a snippet of source (`Finding.code_snippet`/
+    `code_snippet_start_line`) straight off the host checkout at scan
+    time (`_read_context_snippet()`) — the one moment this scanner has
+    filesystem access at all — so `src/llm/enrich.py` and
+    `src/scanner/screenshot.py` have something to work with later without
+    needing a remote API of their own.
 - **`src/scanner/screenshot.py`** — see the deep dive below. Not part of the
-  `ScannerClient` contract — it's a SonarQube-specific bonus capability
-  (source-lines API, `SONAR_TOKEN` auth), called directly by the
+  `ScannerClient` contract — a bonus capability called directly by the
   screenshot activity rather than through `get_scanner_client()`.
+  `render_finding_snippet()` prefers `finding.code_snippet` when a
+  scanner already captured one (local Semgrep); only a SonarQube finding
+  with none falls back to its live source-lines API call.
 
 #### The snippet-rendering story
 
@@ -369,9 +409,12 @@ source lines around the flagged line, rendered entirely server-side via
 earlier implementation drove headless Chromium via Playwright to
 screenshot SonarQube's own web UI (see git history before this rewrite
 if you need the old approach's own hard-won gotchas) — that whole
-approach is gone, not kept alongside this one. Two things worth
+approach is gone, not kept alongside this one. Everything below is about
+the SonarQube-specific fetch path (`fetch_snippet_lines()`); a finding
+that already carries `code_snippet` (local Semgrep) skips straight to the
+Pygments render and never hits any of this. Two things worth
 understanding because they're non-obvious and were confirmed live, not
-assumed, while building this:
+assumed, while building the SonarQube path:
 
 **1. SonarQube's `/api/sources/lines` returns HTML-marked-up code, not
 plain text.** Confirmed live against a real instance: the `code` field
@@ -756,7 +799,9 @@ still exists as a legacy fallback for contexts with no per-config
 credentials of their own (the webhook receiver's oldest code path, and
 now also the standalone GitHub Action, which deliberately has no
 Postgres/config-store at all and reads these directly from GitHub Actions
-secrets instead):
+secrets instead) — this legacy path is SonarQube-only; a local Semgrep
+config always goes through the normal config-store path, since it has no
+webhook receiver route to need a global fallback for:
 
 | Variable | Read by | Purpose |
 |---|---|---|
@@ -793,3 +838,40 @@ secrets instead):
   the only ticket client that exists — the pattern is there for when
   (if) a second backend is added, not because it currently does
   anything at runtime.
+- **Local Semgrep tickets never auto-close.** `SemgrepLocalClient.fetch_resolutions()`
+  always returns `{}` — `reconcile_resolved_findings_activity` runs inside
+  the Temporal worker, which has no access to the host checkout a Semgrep
+  scan needs to re-run against. A resolved Semgrep finding's ticket has
+  to be closed manually.
+- **Local Semgrep's dedup key can miss on a refactor.** Without a
+  semgrep.dev login, `extra.fingerprint` is never present (confirmed live
+  against semgrep-interfaces' schema — required since Semgrep 1.98.0), so
+  `SemgrepLocalClient` falls back to hashing `check_id|path|start_line|end_line`.
+  Code moving (not just changing) can shift a finding's line numbers
+  enough to hash differently, creating a new ticket instead of matching
+  the existing one — unlike SonarQube's server-tracked issue keys, which
+  survive that.
+- **A local Semgrep finding's snippet is only as good as what was on disk
+  at scan time.** Unlike SonarQube (whose snippet is fetched live, from
+  whatever `create_tickets_activity`/`capture_and_attach_screenshot_activity`
+  see when they run), `scanner/semgrep_local.py` reads
+  `finding.code_snippet` off the host checkout once, during the scan
+  itself (`_read_context_snippet()`) — because that's the only moment this
+  scanner has filesystem access at all (see [`core/models.py` and the
+  scanner/ticket seam](#coremodelspy-and-the-scannerticket-seam)). Both
+  `llm/enrich.py`'s `enrich_finding()` and `scanner/screenshot.py`'s
+  `render_finding_snippet()` use it directly when present, and never call
+  SonarQube's API for a non-SonarQube finding. If the file couldn't be
+  read at scan time (renamed/deleted mid-scan, permission issue),
+  `code_snippet` stays `None` — the ticket still gets its LLM explanation
+  and comment, just without a snippet in the prompt and without a
+  screenshot attachment (logged, not a failure).
+- **Semgrep's credential-rule guard is a keyword heuristic, not an exact
+  list.** Semgrep's Registry has no fixed prefix/suffix convention for
+  hardcoded-secret rules the way SonarQube's `:S2068`/`secrets:` do — 
+  `llm/enrich.py`'s `_is_credential_rule()` instead checks whether the
+  rule key contains `"secret"` or `"hardcoded"` (case-insensitive), which
+  covers every real Semgrep credential rule found while confirming this
+  (e.g. `generic.secrets.security.detected-*`,
+  `*.lang.security.audit.hardcoded-password-*`) without ever matching
+  SonarQube's own terse `language:S1234` rule keys.

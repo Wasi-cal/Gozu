@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
 # Depends on: src/temporal/data_converter.py - the Pydantic-aware data converter and task queue name
@@ -46,6 +47,16 @@ async def trigger_workflow(
     env vars (which is what the webhook receiver's SonarToJiraInput -
     lacking these fields - still does).
 
+    `pre_fetched_findings` (Trivy, local Semgrep - see
+    src/cli/scan_runner/semgrep_exec.py) is set for scanners with no
+    server the worker container can query remotely; every other caller
+    leaves it None. Trivy skips fetch_findings_activity inside the
+    workflow entirely (no branch concept - see
+    SonarToJiraInput.pre_fetched_findings's own docstring), while Semgrep
+    still routes through the activity so its findings get branch-stamped
+    the same way every other scanner's do (see
+    temporal/activities/fetch_findings.py).
+
     workflow_id is deterministic per SonarQube analysis (ceTaskId is unique
     per actual compute-engine task), the same idempotency pattern the old
     webhook receiver used with (project_key, webhook task_id). `ce_task_id`
@@ -53,11 +64,6 @@ async def trigger_workflow(
     subprocess call, never a tracked async server-side task) - a random
     id is used instead for that case, the same "no natural idempotency key
     available" fallback trigger_reconcile_only() below already uses.
-
-    `pre_fetched_findings` (Trivy) skips fetch_findings_activity inside the
-    workflow entirely - see SonarToJiraInput.pre_fetched_findings's own
-    docstring for why (the worker container can't access the scanned path
-    itself) and the retry-boundary trade-off that implies.
 
     A multi-branch config (more than one entry in `branches`) starts
     MultiBranchScanWorkflow instead of a single ScanToTicketWorkflow - the

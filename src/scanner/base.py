@@ -4,7 +4,7 @@
 
 """
 Generic scanner interface plus shared constants. Adding a new scanner
-(Snyk, Semgrep, whatever) means writing a new ScannerClient subclass and
+(Snyk, CodeQL, whatever) means writing a new ScannerClient subclass and
 registering it in src/scanner/factory.py - nothing in src/core/models.py,
 src/ticket/, or the Temporal workflow/activities/receiver needs to change.
 """
@@ -63,6 +63,7 @@ DEFAULT_SEVERITY = Severity.MEDIUM
 SCANNER_REGISTRY: dict[str, str] = {
     "sonarqube": "SonarQube",
     "trivy": "Trivy",
+    "semgrep": "Semgrep",
 }
 
 

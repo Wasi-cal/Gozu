@@ -5,12 +5,14 @@
 # Depends on: src/scanner/sonarqube_cloud.py - dispatches to SonarQubeCloudClient for scanner_mode "cloud"
 # Depends on: src/scanner/sonarqube_server.py - dispatches to SonarQubeServerClient for scanner_mode "local"
 # Depends on: src/scanner/trivy_client.py - dispatches to TrivyClient for scanner_type "trivy"
+# Depends on: src/scanner/semgrep_local.py - dispatches to SemgrepLocalClient for scanner_type "semgrep"
 
 """Pure-builder + env-reading-wrapper pair for constructing a ScannerClient - see src/ticket/factory.py for the same pattern."""
 
 import os
 
 from scanner.base import ScannerClient
+from scanner.semgrep_local import SemgrepLocalClient
 from scanner.sonarqube_cloud import SonarQubeCloudClient
 from scanner.sonarqube_server import SonarQubeServerClient
 from scanner.trivy_client import TrivyClient
@@ -22,8 +24,20 @@ def build_scanner_client(scanner_type: str, scanner_mode: str, credentials: dict
     reads. This is what a specific config's credentials (config.store.
     get_config(), as used by `gozu run`) go through; get_scanner_client()
     below is a thin env-reading wrapper around this for the legacy
-    single-global-config path (the webhook receiver).
+    single-global-config path (the webhook receiver) - SonarQube-only,
+    since Semgrep has no webhook receiver route (its trigger_mode is
+    always "direct" - see cli/scan_runner/__init__.py).
     """
+    if scanner_type == "sonarqube":
+        token = credentials.get("sonar_token", "")
+        if scanner_mode == "local":
+            return SonarQubeServerClient(base_url=credentials.get("sonar_host_url", "http://localhost:9000"), token=token)
+        if scanner_mode == "cloud":
+            return SonarQubeCloudClient(
+                base_url="https://sonarcloud.io", token=token, organization=credentials.get("sonar_organization", "")
+            )
+        raise ValueError(f"Unrecognized scanner_mode '{scanner_mode}' for scanner_type 'sonarqube'. Expected 'local' or 'cloud'.")
+
     if scanner_type == "trivy":
         # No credentials at all - a local subprocess, not a remote API
         # with a token. `credentials` still arrives here (every caller
@@ -32,17 +46,12 @@ def build_scanner_client(scanner_type: str, scanner_mode: str, credentials: dict
         # function has to branch around.
         return TrivyClient()
 
-    if scanner_type != "sonarqube":
-        raise ValueError(f"Unrecognized scanner_type '{scanner_type}'. Expected 'sonarqube' or 'trivy'.")
+    if scanner_type == "semgrep":
+        if scanner_mode != "local":
+            raise ValueError(f"Unrecognized scanner_mode '{scanner_mode}' for scanner_type 'semgrep'. Expected 'local'.")
+        return SemgrepLocalClient()
 
-    token = credentials.get("sonar_token", "")
-    if scanner_mode == "local":
-        return SonarQubeServerClient(base_url=credentials.get("sonar_host_url", "http://localhost:9000"), token=token)
-    if scanner_mode == "cloud":
-        return SonarQubeCloudClient(
-            base_url="https://sonarcloud.io", token=token, organization=credentials.get("sonar_organization", "")
-        )
-    raise ValueError(f"Unrecognized scanner_mode '{scanner_mode}'. Expected 'local' or 'cloud'.")
+    raise ValueError(f"Unrecognized scanner_type '{scanner_type}'. Expected 'sonarqube', 'trivy', or 'semgrep'.")
 
 
 def get_scanner_client() -> ScannerClient:

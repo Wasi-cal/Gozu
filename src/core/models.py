@@ -62,6 +62,15 @@ class Finding(BaseModel):
     package_name: str | None = None
     installed_version: str | None = None
     fixed_version: str | None = None
+    # Source lines pre-fetched by a scanner with no remote server to fetch
+    # them from later (local Semgrep - src/scanner/semgrep_local.py reads
+    # them off the host checkout at scan time). None means "not
+    # pre-fetched" - src/llm/enrich.py and src/scanner/screenshot.py fall
+    # back to their SonarQube-API fetch in that case.
+    code_snippet: str | None = None
+    # Absolute file line number of code_snippet's first line - meaningless
+    # when code_snippet is None.
+    code_snippet_start_line: int | None = None
 
 
 class CreatedTicket(BaseModel):

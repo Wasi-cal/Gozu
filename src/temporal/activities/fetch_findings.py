@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
 # Depends on: src/scanner/factory.py - builds/gets the scanner client used to fetch findings
@@ -39,16 +40,10 @@ def _get_git_branch() -> str | None:
 
 @activity.defn
 async def fetch_findings_activity(input: FetchFindingsInput) -> list[Finding]:
-    client = (
-        build_scanner_client(input.scanner_type, input.scanner_mode, input.credentials)
-        if input.credentials
-        else get_scanner_client()
-    )
     branch = input.branch if input.branch is not None else _get_git_branch()
-    findings = client.fetch_findings(input.project_key, branch=branch)
 
     # Deliberately NOT always `branch` - that value is also what scoped the
-    # fetch_findings() query above, which stays gated to configs SonarQube
+    # fetch_findings() query below, which stays gated to configs SonarQube
     # actually supports branch-scoping for (see SonarToJiraInput.branch's
     # docstring: None for local/Community and Cloud Free). Ticket labeling
     # has no such restriction - display_branch is the host's real git
@@ -57,6 +52,22 @@ async def fetch_findings_activity(input: FetchFindingsInput) -> list[Finding]:
     # the actual branch scanned instead of "unknown" just because
     # SonarQube itself couldn't be told to scope by it.
     label = input.display_branch if input.display_branch is not None else branch
+
+    if input.pre_fetched_findings is not None:
+        # A scanner with no server to query remotely (local Semgrep) runs
+        # host-side, before this activity ever executes - see
+        # src/cli/scan_runner/semgrep_exec.py. Nothing to fetch here; just
+        # stamp the branch label, same as the normal path below does.
+        for finding in input.pre_fetched_findings:
+            finding.branch = label
+        return input.pre_fetched_findings
+
+    client = (
+        build_scanner_client(input.scanner_type, input.scanner_mode, input.credentials)
+        if input.credentials
+        else get_scanner_client()
+    )
+    findings = client.fetch_findings(input.project_key, branch=branch)
     for finding in findings:
         finding.branch = label
 

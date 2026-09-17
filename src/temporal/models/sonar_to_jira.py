@@ -42,10 +42,10 @@ class SonarToJiraInput(BaseModel):
 
     # Findings already fetched HOST-SIDE (src/cli/scan_runner/), before this
     # workflow was even triggered - set only for scanners whose scan is a
-    # local-filesystem operation (Trivy `fs` mode) the Temporal worker
-    # container can't perform itself (no volume mount of the scanned path).
-    # When set, ScanToTicketWorkflow.run() skips fetch_findings_activity
-    # entirely. Deliberate trade-off: a transient trivy fs failure isn't
-    # covered by Temporal's activity retry, the same way a transient
-    # sonar-scanner failure (also host-side) already isn't.
+    # local-filesystem operation (Trivy `fs` mode, local Semgrep) the
+    # Temporal worker container can't perform itself (no volume mount of
+    # the scanned path). When set, ScanToTicketWorkflow.run() skips
+    # fetch_findings_activity entirely. Deliberate trade-off: a transient
+    # host-side scan failure isn't covered by Temporal's activity retry,
+    # the same way a transient sonar-scanner failure already isn't.
     pre_fetched_findings: list[Finding] | None = None

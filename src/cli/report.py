@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
 
 """
 `gozu run`'s end-of-run summary - printed once, after every activity
@@ -71,7 +72,7 @@ def render_run_report(
     _console.print(
         Panel(
             table,
-            title=Text(f"gozu run - {config_name} [{branch_label}] (SonarQube task {ce_task_id})"),
+            title=Text(f"gozu run - {config_name} [{branch_label}] (task {ce_task_id})"),
             expand=False,
         )
     )

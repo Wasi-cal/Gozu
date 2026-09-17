@@ -9,8 +9,8 @@
 # Depends on: src/cli/stack/profiles.py - bringing Postgres up before saving a config
 # Depends on: src/cli/wizard_engine.py - the shared review/edit engine this wizard drives
 # Depends on: src/scanner/base.py - listing the registered scanner types to choose from
-# Depends on: src/cli/prerequisites/__init__.py - ensure_trivy() for a Trivy scanner_type
 # Depends on: src/cli/init_wizard/llm_step.py - the optional Anthropic API key prompt
+# Depends on: src/cli/init_wizard/semgrep_step.py - the local Semgrep project-label prompt
 
 """
 `gozu init` - the interactive setup wizard. Provisions .env, checks/
@@ -42,6 +42,7 @@ from cli.init_wizard.jira_step import (
     prompt_jira_url,
 )
 from cli.init_wizard.llm_step import prompt_anthropic_api_key
+from cli.init_wizard.semgrep_step import prompt_project_label
 from cli.init_wizard.sonar_cloud import (
     confirm_free_plan_limitation,
     prompt_free_branch,
@@ -58,7 +59,6 @@ from cli.init_wizard.sonar_local import (
     select_scanner_mode,
 )
 from cli.init_wizard.summary import print_summary
-from cli.prerequisites import ensure_trivy
 from cli.prompts import ask_or_exit, generate_or_prompt_secret
 from cli.stack.cleanup import InterruptCleanup
 from cli.stack.files import ensure_stack_files
@@ -100,24 +100,45 @@ def _prompt_config_name() -> str:
 def _build_fields(
     state: dict, stack_dir: Path, cleanup: InterruptCleanup, scanner_type: str, scanner_mode: str
 ) -> tuple[list[WizardField], str, str | None]:
-    """Resolves the remaining structural questions and returns the
-    value-level WizardField list they imply, plus trigger_mode/sonar_plan.
-    `state` is mutated with each structural value; every WizardField
-    closure below reads/writes `state` by reference."""
+    """
+    Resolves the remaining structural questions (SonarQube host/infra for
+    Local; Free-vs-Premium for Cloud; reuse-vs-create a ticket
+    destination) and returns the value-level WizardField list they imply,
+    plus the trigger_mode/sonar_plan those structural answers fix
+    directly (never part of the field list - see this module's own
+    docstring). `state` is mutated with each structural, non-revisable
+    value too (sonar_host_url; destination_choice/existing_destination_id
+    aren't config fields at all, so they're returned rather than stashed
+    in `state`) - every WizardField closure below reads/writes `state` by
+    reference, per src/cli/wizard_engine.py's contract.
+
+    Trivy and local Semgrep each have no Local-vs-Cloud split, no
+    host/infra to bring up, and no webhook - `trigger_mode` is fixed to
+    "direct" (`gozu run` scans and creates tickets in one step). Trivy
+    needs no value-level fields at all (a local filesystem scan, see
+    src/cli/scan_runner/__init__.py's _run_trivy_scan_cycle()); Semgrep's
+    only field is a display label, reusing the "project_key" state key
+    SonarQube's own field already uses so _commit()/print_summary() need
+    no branching for it.
+    """
     fields: list[WizardField] = []
     sonar_plan: str | None = None
 
     if scanner_type == "trivy":
-        # No credentials, no host, no organization, no project_key at
-        # all - a local binary scan needs none of SonarQube's fields.
-        # `gozu run --path <dir>` (defaulting to ".") selects the scan
-        # target per invocation instead of a config-persisted value - see
-        # cli/scan_runner/__init__.py's _run_trivy_scan_cycle(). "direct"
-        # is the only trigger_mode that fits: there's no async server
-        # pushing scan-complete events the way SonarQube's
-        # webhook/--watch mechanisms need - the user just runs `gozu run`
-        # whenever they want a scan.
         trigger_mode = "direct"
+        typer.echo(
+            "trigger_mode is set to 'direct' automatically - `gozu run` scans and creates tickets "
+            "in one step, no webhook needed."
+        )
+    elif scanner_type == "semgrep":
+        trigger_mode = "direct"
+        fields.append(
+            WizardField("project_key", "Project label", lambda: prompt_project_label(state.get("project_key", "")))
+        )
+        typer.echo(
+            "trigger_mode is set to 'direct' automatically - `gozu run` scans and creates tickets "
+            "in one step, no webhook needed."
+        )
     elif scanner_mode == "local":
         state["sonar_host_url"] = ensure_local_sonarqube_host(stack_dir, cleanup)
         trigger_mode = "webhook"
@@ -237,20 +258,21 @@ def _commit(state: dict, name: str, scanner_type: str, scanner_mode: str, trigge
     else:
         ticket_destination_id = state["_existing_destination_id"]
 
-    if scanner_type == "trivy":
-        credentials: dict[str, str] = {}
-        project_key = None
-    else:
-        credentials = {"sonar_token": state["sonar_token"]}
+    credentials: dict[str, str] = {}
+    if scanner_type == "sonarqube":
+        credentials["sonar_token"] = state["sonar_token"]
         if scanner_mode == "local":
             credentials["sonar_host_url"] = state["sonar_host_url"]
         else:
             credentials["sonar_organization"] = state["sonar_organization"]
-        if trigger_mode == "webhook":
-            credentials["webhook_secret"] = state["webhook_secret"]
-        if state.get("anthropic_api_key"):
-            credentials["anthropic_api_key"] = state["anthropic_api_key"]
-        project_key = state["project_key"]
+    if trigger_mode == "webhook":
+        credentials["webhook_secret"] = state["webhook_secret"]
+    if state.get("anthropic_api_key"):
+        credentials["anthropic_api_key"] = state["anthropic_api_key"]
+    # Trivy has no project_key at all (a local filesystem scan, not a
+    # named project); Semgrep reuses "project_key" for its display label
+    # (see _build_fields()'s own docstring).
+    project_key = None if scanner_type == "trivy" else state["project_key"]
 
     config_store.create_config(
         name=name,
@@ -295,21 +317,21 @@ def _run_init_wizard_body(stack_dir: Path, cleanup: InterruptCleanup) -> None:
         # "binary" (not "local"/"cloud") - Trivy has no such distinction
         # at all, and deliberately not "local" specifically: several
         # existing checks key Docker-profile/host-url selection off
-        # `scanner_mode == "local"` for SonarQube (cli/stack/profiles.py's
-        # active_profiles(), cli/scan_runner/config_fields.py's
+        # `scanner_mode == "local"` for SonarQube (src/cli/stack/profiles.py's
+        # active_profiles(), src/cli/scan_runner/config_fields.py's
         # scanner_host_url()) - reusing "local" here would make a Trivy
         # config incorrectly trip those SonarQube-specific checks (e.g.
         # trying to start the sonarqube-local Docker profile a Trivy
         # config never needs).
         scanner_mode = "binary"
-        waiting("Checking prerequisites (trivy) ...")
-        ensure_trivy()
+    elif scanner_type == "semgrep":
+        # Local Semgrep has no Local-vs-Cloud split at all - "local" is its
+        # only scanner_mode (see src/scanner/factory.py's build_scanner_client()).
+        scanner_mode = "local"
     else:
         scanner_mode = select_scanner_mode()
-        # Both scanner_modes run sonar-scanner on THIS host (see
-        # step_ensure_prerequisites()'s docstring) - unconditional, not
-        # gated on Local vs Cloud.
-        step_ensure_prerequisites()
+
+    step_ensure_prerequisites(scanner_type)
 
     state: dict = {}
     fields, trigger_mode, sonar_plan = _build_fields(state, stack_dir, cleanup, scanner_type, scanner_mode)
