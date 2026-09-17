@@ -4,9 +4,10 @@ This document explains the internals of gozu's scan-to-ticket pipeline:
 what happens end-to-end when a scan finishes, why each piece is built the
 way it is, and the non-obvious decisions (and bugs found along the way)
 baked into the current code. gozu's scanner and ticket-backend interfaces
-are pluggable by design (`ScannerClient`/`TicketClient`); SonarQube and
-Jira are the currently implemented backends, so the walkthrough below is
-written in terms of them. For setup/installation steps, see `README.md` —
+are pluggable by design (`ScannerClient`/`TicketClient`); SonarQube,
+Trivy, and Semgrep (scanners) and Jira (ticket backend) are the currently
+implemented backends, so the walkthrough below is written in terms of
+them. For setup/installation steps, see `README.md` —
 this document assumes the system is already running and focuses on how
 it behaves.
 

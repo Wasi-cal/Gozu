@@ -8,7 +8,7 @@ name is decided, not a placeholder - use it consistently: the command is
 `sonar-to-jira` for now - don't rename it without checking first, since
 that's a separate decision from the product's own name.
 It's scanner- and ticket-backend-agnostic by design: users scan code with
-a pluggable choice of scanners (currently SonarQube and Trivy) and get
+a pluggable choice of scanners (currently SonarQube, Trivy, and Semgrep) and get
 tickets auto-created in a pluggable choice of ticket-tracking backends
 (currently Jira), orchestrated with Temporal. These are the first concrete
 implementations, not the definition of the tool - don't write new

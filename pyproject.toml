@@ -8,8 +8,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gozu"
-version = "0.3.6"
-description = "Scan code with a pluggable choice of scanners (currently SonarQube and Trivy) and auto-create tickets in a pluggable choice of ticket-tracking backends (currently Jira), orchestrated with Temporal."
+version = "0.3.7"
+description = "Scan code with a pluggable choice of scanners (currently SonarQube, Trivy, and Semgrep) and auto-create tickets in a pluggable choice of ticket-tracking backends (currently Jira), orchestrated with Temporal."
 requires-python = ">=3.12"
 dependencies = [
     "flask",
