@@ -10,6 +10,7 @@
 # Depends on: cli/wizard_engine.py - the shared review/edit engine this wizard drives
 # Depends on: scanner/base.py - listing the registered scanner types to choose from
 # Depends on: cli/init_wizard/llm_step.py - the optional Anthropic API key prompt
+# Depends on: cli/init_wizard/semgrep_step.py - the local Semgrep project-label prompt
 
 """
 `gozu init` - the interactive setup wizard. Provisions .env, checks/
@@ -46,6 +47,7 @@ from cli.init_wizard.jira_step import (
     prompt_jira_url,
 )
 from cli.init_wizard.llm_step import prompt_anthropic_api_key
+from cli.init_wizard.semgrep_step import prompt_project_label
 from cli.init_wizard.sonar_cloud import (
     confirm_free_plan_limitation,
     prompt_free_branch,
@@ -101,7 +103,7 @@ def _prompt_config_name() -> str:
 
 
 def _build_fields(
-    state: dict, stack_dir: Path, cleanup: InterruptCleanup, scanner_mode: str
+    state: dict, stack_dir: Path, cleanup: InterruptCleanup, scanner_type: str, scanner_mode: str
 ) -> tuple[list[WizardField], str, str | None]:
     """
     Resolves the remaining structural questions (SonarQube host/infra for
@@ -114,11 +116,26 @@ def _build_fields(
     aren't config fields at all, so they're returned rather than stashed
     in `state`) - every WizardField closure below reads/writes `state` by
     reference, per cli/wizard_engine.py's contract.
+
+    Local Semgrep has no Local-vs-Cloud split, no host/infra to bring up,
+    and no webhook - `trigger_mode` is fixed to "direct" (`gozu run` scans
+    and creates tickets in one step) and the only value-level field is a
+    display label, reusing the "project_key" state key SonarQube's own
+    field already uses so _commit()/print_summary() need no branching for it.
     """
     fields: list[WizardField] = []
     sonar_plan: str | None = None
 
-    if scanner_mode == "local":
+    if scanner_type == "semgrep":
+        trigger_mode = "direct"
+        fields.append(
+            WizardField("project_key", "Project label", lambda: prompt_project_label(state.get("project_key", "")))
+        )
+        typer.echo(
+            "trigger_mode is set to 'direct' automatically - `gozu run` scans and creates tickets "
+            "in one step, no webhook needed."
+        )
+    elif scanner_mode == "local":
         state["sonar_host_url"] = ensure_local_sonarqube_host(stack_dir, cleanup)
         trigger_mode = "webhook"
         fields += [
@@ -245,11 +262,13 @@ def _commit(state: dict, name: str, scanner_type: str, scanner_mode: str, trigge
     else:
         ticket_destination_id = state["_existing_destination_id"]
 
-    credentials: dict[str, str] = {"sonar_token": state["sonar_token"]}
-    if scanner_mode == "local":
-        credentials["sonar_host_url"] = state["sonar_host_url"]
-    else:
-        credentials["sonar_organization"] = state["sonar_organization"]
+    credentials: dict[str, str] = {}
+    if scanner_type == "sonarqube":
+        credentials["sonar_token"] = state["sonar_token"]
+        if scanner_mode == "local":
+            credentials["sonar_host_url"] = state["sonar_host_url"]
+        else:
+            credentials["sonar_organization"] = state["sonar_organization"]
     if trigger_mode == "webhook":
         credentials["webhook_secret"] = state["webhook_secret"]
     if state.get("anthropic_api_key"):
@@ -305,15 +324,14 @@ def _run_init_wizard_body(stack_dir: Path, cleanup: InterruptCleanup) -> None:
 
     typer.secho("Step 2/3: scanner + credentials", bold=True)
     scanner_type = _select_scanner()
-    scanner_mode = select_scanner_mode()
+    # Local Semgrep has no Local-vs-Cloud split at all - "local" is its
+    # only scanner_mode (see scanner/factory.py's build_scanner_client()).
+    scanner_mode = "local" if scanner_type == "semgrep" else select_scanner_mode()
 
-    # Both scanner_modes run sonar-scanner on THIS host (see
-    # step_ensure_prerequisites()'s docstring) - unconditional, not gated
-    # on Local vs Cloud.
-    step_ensure_prerequisites()
+    step_ensure_prerequisites(scanner_type)
 
     state: dict = {}
-    fields, trigger_mode, sonar_plan = _build_fields(state, stack_dir, cleanup, scanner_mode)
+    fields, trigger_mode, sonar_plan = _build_fields(state, stack_dir, cleanup, scanner_type, scanner_mode)
     state = run_wizard(fields, state, walk_first=True)
 
     typer.secho("Step 3/3: name this config", bold=True)

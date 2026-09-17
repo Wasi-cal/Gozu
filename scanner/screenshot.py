@@ -7,13 +7,16 @@
 
 """
 Renders a syntax-highlighted PNG snippet of the source lines around a
-finding, server-side via Pygments
+finding, server-side via Pygments.
 
-render_finding_snippet() fetches the raw source lines directly from
-SonarQube's REST API (/api/sources/lines), not by rendering any page -
-this process was already able to make that same authenticated call for
-everything else (scanner/sonarqube_common.py), so this needed no new
-capability, just a new endpoint.
+For a SonarQube finding, render_finding_snippet() fetches the raw source
+lines directly from SonarQube's REST API (/api/sources/lines), not by
+rendering any page - this process was already able to make that same
+authenticated call for everything else (scanner/sonarqube_common.py), so
+this needed no new capability, just a new endpoint. A finding whose
+scanner already captured its own snippet host-side (finding.code_snippet -
+e.g. local Semgrep, which has no remote API this could fetch from later)
+uses that instead, and never calls out to SonarQube at all.
 
 The annotation text SonarQube's own UI showed alongside the snippet
 (the old Playwright code scraped it from the rendered DOM) is simply
@@ -77,14 +80,26 @@ def fetch_snippet_lines(finding: Finding, token: str, context_lines: int) -> tup
 
 def render_finding_snippet(finding: Finding, token: str, context_lines: int = DEFAULT_CONTEXT_LINES) -> bytes:
     """
-    Fetch the source lines around `finding.line` (±`context_lines`) and
-    render them as a syntax-highlighted PNG, the flagged line
-    highlighted. Raises on any failure (a bad response, no lexer
-    somehow, ...) rather than swallowing it - the caller
+    Get the source lines around `finding.line` and render them as a
+    syntax-highlighted PNG, the flagged line highlighted. Raises on any
+    failure (a bad response, no lexer somehow, no snippet available at
+    all, ...) rather than swallowing it - the caller
     (temporal/activities/capture_and_attach_screenshot.py) is what
     decides how to make that visible, not this function.
+
+    `finding.code_snippet` (set by a scanner that already read the source
+    itself, host-side, at scan time - e.g. scanner/semgrep_local.py, which
+    has no remote API this function could fetch from later) is preferred
+    over fetching one here. Only a SonarQube finding with no pre-fetched
+    snippet falls back to fetch_snippet_lines()'s live API call.
     """
-    lines, from_line = fetch_snippet_lines(finding, token, context_lines)
+    if finding.code_snippet is not None:
+        lines = finding.code_snippet.split("\n")
+        from_line = finding.code_snippet_start_line or (finding.line or 1)
+    elif finding.source_tool == "sonarqube":
+        lines, from_line = fetch_snippet_lines(finding, token, context_lines)
+    else:
+        raise RuntimeError(f"No code snippet available for {finding.source_tool} finding {finding.key}")
     code = "\n".join(lines)
 
     path = finding.component.split(":", 1)[-1]  # component is "{project_key}:{relative/path}"

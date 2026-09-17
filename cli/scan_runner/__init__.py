@@ -4,14 +4,19 @@
 #
 # Depends on: config/store.py - persisting last-scan git state back to the config
 # Depends on: cli/prerequisites/__init__.py - ensuring Java/sonar-scanner are installed before scanning
+# Depends on: cli/scan_runner/semgrep_exec.py - running a local Semgrep scan host-side
 
 """
-`gozu run`'s actual logic: pick a config, run sonar-scanner, wait for
-SonarQube's server-side processing to finish, then trigger the Temporal
-workflow directly - no webhook involved.
+`gozu run`'s actual logic: pick a config, scan, then trigger the Temporal
+workflow directly - no webhook involved. Branches on `scanner_type`:
+SonarQube runs sonar-scanner and waits for its server-side processing to
+finish before triggering the workflow; local Semgrep runs synchronously
+and threads its findings straight into the workflow input instead (see
+_run_semgrep_scan_cycle()'s own docstring for why).
 """
 
 import asyncio
+import uuid
 
 import config.store as config_store
 from cli.prerequisites import ensure_java, ensure_sonar_scanner
@@ -24,6 +29,7 @@ from cli.scan_runner.scanner_exec import (
     run_scanner,
     wait_for_analysis,
 )
+from cli.scan_runner.semgrep_exec import run_semgrep_local_scan
 from cli.scan_runner.workflow_trigger import trigger_reconcile_only, trigger_workflow
 from cli.status import waiting, warning
 from core.models import TicketResult
@@ -32,6 +38,68 @@ __all__ = ["run_scan_cycle", "select_config"]
 
 
 def run_scan_cycle(
+    config: dict, path: str, skip_unchanged: bool = False, ticket_cap: int | None = None
+) -> tuple[str, list[str], TicketResult]:
+    if config["scanner_type"] == "semgrep":
+        return _run_semgrep_scan_cycle(config, path, skip_unchanged, ticket_cap)
+    return _run_sonarqube_scan_cycle(config, path, skip_unchanged, ticket_cap)
+
+
+def _run_semgrep_scan_cycle(
+    config: dict, path: str, skip_unchanged: bool, ticket_cap: int | None
+) -> tuple[str, list[str], TicketResult]:
+    """
+    Local Semgrep has no separate async server-side step to wait for the
+    way SonarQube's compute-engine task is (see
+    _run_sonarqube_scan_cycle() below) - `semgrep scan` computes findings
+    synchronously, right here on the host, so they're threaded straight
+    into the workflow input (`pre_fetched_findings`) instead of being
+    fetched by the worker afterward. There's also no ceTaskId to key a
+    workflow id off, so a fresh one is generated per invocation - each
+    `gozu run` cycle is independently triggered by the CLI itself, never
+    replayed by an external webhook, so there's nothing to deduplicate
+    against the way SonarQube's ceTaskId-keyed id guards against.
+    """
+    effective_ticket_cap = ticket_cap if ticket_cap is not None else config.get("ticket_cap")
+
+    pre_scan_git_state = git_state(path) if skip_unchanged else None
+    if skip_unchanged and pre_scan_git_state is not None:
+        current_sha, current_dirty = pre_scan_git_state
+        if (
+            not current_dirty
+            and config.get("last_scan_dirty") is False
+            and current_sha == config.get("last_scan_sha")
+        ):
+            warning(
+                f"Skipping scan - no code changes since the last successful run "
+                f"(HEAD {current_sha[:8]}, working tree clean) - reconciliation still runs"
+            )
+            closed = asyncio.run(trigger_reconcile_only(config))
+            return "(skipped - no code changes)", [], TicketResult(closed=closed)
+
+    display_branch = detect_git_branch(path)
+
+    waiting(f"Running semgrep against {path} ...")
+    findings = run_semgrep_local_scan(path, display_branch)
+
+    run_id = f"semgrep-{uuid.uuid4().hex}"
+    waiting(f"Found {len(findings)} finding(s) - triggering ScanToTicketWorkflow ...")
+    ticket_result = asyncio.run(
+        trigger_workflow(
+            config, run_id, display_branch, display_branch, effective_ticket_cap, pre_fetched_findings=findings
+        )
+    )
+
+    if skip_unchanged and pre_scan_git_state is not None:
+        sha, dirty = pre_scan_git_state
+        config_store.update_config_fields(config["name"], last_scan_sha=sha, last_scan_dirty=dirty)
+        config["last_scan_sha"] = sha
+        config["last_scan_dirty"] = dirty
+
+    return run_id, ([display_branch] if display_branch else []), ticket_result
+
+
+def _run_sonarqube_scan_cycle(
     config: dict, path: str, skip_unchanged: bool = False, ticket_cap: int | None = None
 ) -> tuple[str, list[str], TicketResult]:
     """

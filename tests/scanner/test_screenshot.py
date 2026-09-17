@@ -9,7 +9,14 @@ from core.models import Finding, Severity
 from scanner.screenshot import fetch_snippet_lines, _host_url_from_deep_link, render_finding_snippet
 
 
-def make_finding(line: int | None = 5, component: str = "proj:hello.py", deep_link: str | None = None) -> Finding:
+def make_finding(
+    line: int | None = 5,
+    component: str = "proj:hello.py",
+    deep_link: str | None = None,
+    source_tool: str = "sonarqube",
+    code_snippet: str | None = None,
+    code_snippet_start_line: int | None = None,
+) -> Finding:
     return Finding(
         key="proj:hello.py:1",
         title="Weak hash algorithm",
@@ -19,7 +26,9 @@ def make_finding(line: int | None = 5, component: str = "proj:hello.py", deep_li
         message="Make sure that hashing data is safe here.",
         finding_type="vulnerability",
         deep_link=deep_link or "http://localhost:9000/project/issues?id=proj&issues=x",
-        source_tool="sonarqube",
+        source_tool=source_tool,
+        code_snippet=code_snippet,
+        code_snippet_start_line=code_snippet_start_line,
     )
 
 
@@ -158,3 +167,36 @@ def test_render_finding_snippet_falls_back_to_text_lexer_for_unknown_extension()
                 png_bytes = render_finding_snippet(finding, "tok", context_lines=0)
 
     assert png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+# --- A finding whose scanner already captured its own snippet (e.g. local Semgrep) never calls SonarQube's API ---
+
+
+def test_render_finding_snippet_uses_pre_captured_snippet_without_any_http_call():
+    finding = make_finding(
+        line=20, component="app.py", source_tool="semgrep", code_snippet="\n".join(f"line {n}" for n in range(5, 31)), code_snippet_start_line=5
+    )
+
+    with patch("scanner.screenshot.requests.get") as mock_get:
+        with patch("scanner.screenshot.ImageFormatter") as mock_formatter_cls:
+            mock_formatter_cls.return_value = MagicMock()
+            render_finding_snippet(finding, "unused-token")
+
+    mock_get.assert_not_called()
+    _, kwargs = mock_formatter_cls.call_args
+    assert kwargs["line_number_start"] == 5
+    assert kwargs["hl_lines"] == [16]  # 20 - 5 + 1
+
+
+def test_render_finding_snippet_raises_for_non_sonarqube_finding_with_no_snippet_at_all():
+    """No pre-captured snippet and no remote API to fetch from - must raise, not silently call SonarQube's API."""
+    finding = make_finding(source_tool="semgrep", code_snippet=None)
+
+    with patch("scanner.screenshot.requests.get") as mock_get:
+        try:
+            render_finding_snippet(finding, "tok")
+            assert False, "expected RuntimeError"
+        except RuntimeError as e:
+            assert "semgrep" in str(e)
+
+    mock_get.assert_not_called()

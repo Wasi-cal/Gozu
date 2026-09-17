@@ -14,7 +14,7 @@ from temporal.models.create_tickets import CreateTicketsInput
 MODULE = "temporal.activities.create_tickets"
 
 
-def make_finding(key: str, severity: Severity = Severity.HIGH) -> Finding:
+def make_finding(key: str, severity: Severity = Severity.HIGH, source_tool: str = "sonarqube") -> Finding:
     return Finding(
         key=key,
         title="Some vulnerability",
@@ -24,7 +24,7 @@ def make_finding(key: str, severity: Severity = Severity.HIGH) -> Finding:
         message="some message",
         finding_type="vulnerability",
         deep_link="http://localhost:9000/project/issues?id=proj",
-        source_tool="sonarqube",
+        source_tool=source_tool,
         rule_key="python:S5443",
     )
 
@@ -169,6 +169,18 @@ def test_add_llm_explanation_skips_low_severity():
         _add_llm_explanation(finding, {"anthropic_api_key": "sk-ant-..."})
 
     mock_enrich.assert_not_called()
+
+
+def test_add_llm_explanation_enriches_non_sonarqube_finding_too():
+    """LLM enrichment isn't SonarQube-only - llm/enrich.py itself decides how to get a snippet per source_tool."""
+    finding = make_finding("k1", severity=Severity.HIGH, source_tool="semgrep")
+
+    with patch(f"{MODULE}.build_llm_client", return_value=MagicMock()), \
+         patch(f"{MODULE}.enrich_finding", return_value="Explanation") as mock_enrich:
+        _add_llm_explanation(finding, {"anthropic_api_key": "sk-ant-..."})
+
+    mock_enrich.assert_called_once()
+    assert finding.llm_explanation == "Explanation"
 
 
 def test_add_llm_explanation_skips_when_no_anthropic_key_configured():

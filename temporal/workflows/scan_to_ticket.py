@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Wasiullah Rafeeq S
+# Editor: Prakrit Mohanty
 #
 # Depends on: Temporal (Temporal Technologies) - workflow orchestration
 # Depends on: temporal/activities/fetch_findings.py - executes this activity to fetch findings
@@ -50,6 +51,7 @@ class ScanToTicketWorkflow:
                 credentials=input.credentials,
                 branch=input.branch,
                 display_branch=input.display_branch,
+                pre_fetched_findings=input.pre_fetched_findings,
             ),
             start_to_close_timeout=timedelta(seconds=30),
             # SonarQube's issues/hotspots search index can lag a few seconds
