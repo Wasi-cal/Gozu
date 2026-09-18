@@ -11,7 +11,7 @@ see src/cli/prerequisites and src/scanner/factory.py for the same pattern.
 
 import os
 
-from ticket.base import TicketClient
+from ticket.TicketClient import TicketClient
 from ticket.jira_client import JiraClient
 
 

@@ -11,7 +11,7 @@ import os
 
 from scanner.base import ScannerClient
 from scanner.sonarqube_cloud import SonarQubeCloudClient
-from scanner.sonarqube_server import SonarQubeServerClient
+from scanner.sonarqube_local import SonarQubeServerClient
 
 
 def build_scanner_client(scanner_type: str, scanner_mode: str, credentials: dict[str, str]) -> ScannerClient:

@@ -37,7 +37,7 @@ services:
       # database/role exists" step with no evolving schema of its own
       # (SonarQube manages its own schema internally once pointed at an
       # empty database) - not part of gozu's own migration history.
-      - ./db/init_sonarqube_db.sql:/docker-entrypoint-initdb.d/init_sonarqube_db.sql:ro
+      - ./src/db/init_sonarqube_db.sql:/docker-entrypoint-initdb.d/init_sonarqube_db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s

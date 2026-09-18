@@ -16,8 +16,8 @@ from temporalio import activity
 
 from core.errors import TicketAuthError, TicketValidationError
 from core.models import Finding, Severity
-from ticket.adf import bullet_list, code_block, doc, paragraph
-from ticket.base import (
+from ticket.AtlassianDocumentFormat import bullet_list, code_block, doc, paragraph
+from ticket.TicketClient import (
     DEFAULT_PRIORITY,
     SEVERITY_TO_PRIORITY,
     SUMMARY_MAX_LENGTH,
