@@ -20,12 +20,20 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # gozu's own schema is created via src/config/migrations.py's Alembic
-      # migrations (`gozu up` / `gozu down --wipe`), not this hook. This
-      # SonarQube-database bootstrap stays hook-based deliberately: a single
-      # idempotent "ensure this database/role exists" step with no schema
-      # of its own to migrate.
-      - ./db/init_sonarqube_db.sql:/docker-entrypoint-initdb.d/init_sonarqube_db.sql:ro
+      # gozu's own schema (configs, ticket_claims, ...) is no longer
+      # created via this docker-entrypoint-initdb.d hook at all - that
+      # only ever fires once, on a genuinely fresh volume, which is
+      # exactly why --wipe used to need a separate hand-rolled re-run of
+      # the same file. src/config/migrations.py's run_migrations() (Alembic,
+      # called by `gozu up` and `gozu down --wipe`) is now the single,
+      # explicit, authoritative path for both cases - see src/db/migrations/.
+      #
+      # This SonarQube-database bootstrap stays on the old hook-based
+      # approach, deliberately: it's a single idempotent "ensure this
+      # database/role exists" step with no evolving schema of its own
+      # (SonarQube manages its own schema internally once pointed at an
+      # empty database) - not part of gozu's own migration history.
+      - ./src/db/init_sonarqube_db.sql:/docker-entrypoint-initdb.d/init_sonarqube_db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s

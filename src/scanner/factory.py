@@ -3,7 +3,7 @@
 # Editor: Prakrit Mohanty
 #
 # Depends on: src/scanner/sonarqube_cloud.py - dispatches to SonarQubeCloudClient for scanner_mode "cloud"
-# Depends on: src/scanner/sonarqube_server.py - dispatches to SonarQubeServerClient for scanner_mode "local"
+# Depends on: src/scanner/sonarqube_local.py - dispatches to SonarQubeServerClient for scanner_mode "local"
 # Depends on: src/scanner/trivy_client.py - dispatches to TrivyClient for scanner_type "trivy"
 # Depends on: src/scanner/semgrep_local.py - dispatches to SemgrepLocalClient for scanner_type "semgrep"
 
@@ -14,7 +14,7 @@ import os
 from scanner.base import ScannerClient
 from scanner.semgrep_local import SemgrepLocalClient
 from scanner.sonarqube_cloud import SonarQubeCloudClient
-from scanner.sonarqube_server import SonarQubeServerClient
+from scanner.sonarqube_local import SonarQubeServerClient
 from scanner.trivy_client import TrivyClient
 
 
