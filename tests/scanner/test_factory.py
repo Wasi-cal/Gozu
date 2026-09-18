@@ -1,12 +1,13 @@
 # Copyright (c) 2026 Calfus Inc.
 # Author: Prakrit Mohanty
+# Editor: Wasiullah Rafeeq S
 
 import pytest
 
 from scanner.factory import build_scanner_client
 from scanner.semgrep_local import SemgrepLocalClient
 from scanner.sonarqube_cloud import SonarQubeCloudClient
-from scanner.sonarqube_server import SonarQubeServerClient
+from scanner.sonarqube_local import SonarQubeServerClient
 
 
 def test_sonarqube_local_dispatches_to_server_client():

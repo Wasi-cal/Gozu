@@ -341,7 +341,7 @@ which ticketing system sit behind it:
   tickets). `src/scanner/factory.py`'s `get_scanner_client()`/
   `build_scanner_client()` is the single place that picks a concrete
   class from a scanner type + mode.
-  - `SonarQubeServerClient` (`src/scanner/sonarqube_server.py`) — talks to
+  - `SonarQubeServerClient` (`src/scanner/sonarqube_local.py`) — talks to
     self-hosted SonarQube. Auth is HTTP Basic with the token as username
     and an empty password (`(token, "")`), which is SonarQube's
     documented convention for using a personal access token in place of

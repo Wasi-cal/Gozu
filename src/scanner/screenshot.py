@@ -12,7 +12,7 @@ finding, server-side via Pygments.
 For a SonarQube finding, render_finding_snippet() fetches the raw source
 lines directly from SonarQube's REST API (/api/sources/lines), not by
 rendering any page - this process was already able to make that same
-authenticated call for everything else (scanner/sonarqube_common.py), so
+authenticated call for everything else (src/scanner/sonarqube_common.py), so
 this needed no new capability, just a new endpoint. A finding whose
 scanner already captured its own snippet host-side (finding.code_snippet -
 e.g. local Semgrep, which has no remote API this could fetch from later)
