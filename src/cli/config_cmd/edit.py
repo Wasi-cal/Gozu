@@ -34,6 +34,7 @@ from cli.init_wizard.jira_step import (
     prompt_jira_url,
 )
 from cli.init_wizard.llm_step import prompt_anthropic_api_key
+from cli.init_wizard.semgrep_step import prompt_project_label
 from cli.init_wizard.sonar_cloud import (
     prompt_premium_branches,
     prompt_sonar_organization,
@@ -87,13 +88,21 @@ def _prompt_ticket_cap(current: int | None) -> int | None:
 
 def _build_edit_fields(config: dict, state: dict) -> list[WizardField]:
     credentials = config["credentials"]
+    scanner_type = config["scanner_type"]
     scanner_mode = config["scanner_mode"]
     trigger_mode = config["trigger_mode"]
 
     state["project_key"] = config.get("project_key") or ""
     state["ticket_cap"] = config.get("ticket_cap")
+    project_key_field = (
+        WizardField("project_key", "Project label", lambda: prompt_project_label(state.get("project_key", "")))
+        if scanner_type == "semgrep"
+        else WizardField(
+            "project_key", "SonarQube project key", lambda: prompt_project_key(state.get("project_key", ""))
+        )
+    )
     fields = [
-        WizardField("project_key", "SonarQube project key", lambda: prompt_project_key(state.get("project_key", ""))),
+        project_key_field,
         WizardField(
             "ticket_cap",
             "Per-run ticket cap (blank = default)",
@@ -101,7 +110,9 @@ def _build_edit_fields(config: dict, state: dict) -> list[WizardField]:
         ),
     ]
 
-    if scanner_mode == "local":
+    if scanner_type == "semgrep":
+        pass  # no scanner credentials to edit - trigger_mode "direct" needs none
+    elif scanner_mode == "local":
         state["sonar_token"] = credentials.get("sonar_token", "")
         state["sonar_host_url"] = credentials.get("sonar_host_url", "")
         fields += [

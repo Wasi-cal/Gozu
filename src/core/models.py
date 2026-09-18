@@ -62,6 +62,20 @@ class Finding(BaseModel):
     # severity, or the call failed) - the ticket falls back to
     # finding.message, exactly like before this field existed.
     llm_explanation: str | None = None
+    # Source lines already fetched by the scanner adapter itself, for a
+    # scanner with no remote server to fetch them from later (local
+    # Semgrep - scanner/semgrep_local.py reads them off the host checkout
+    # at scan time, since the Temporal worker that would otherwise need to
+    # fetch them has no access to that filesystem). None means "not
+    # pre-fetched" - llm/enrich.py and scanner/screenshot.py both fall
+    # back to their existing SonarQube-API fetch in that case. Plain text,
+    # no HTML markup to strip (unlike SonarQube's own API response).
+    code_snippet: str | None = None
+    # The absolute file line number of code_snippet's first line - needed
+    # to know where `line` falls WITHIN the snippet, same role as
+    # scanner/screenshot.py's fetch_snippet_lines() returning `from_line`
+    # for the SonarQube path. Meaningless when code_snippet is None.
+    code_snippet_start_line: int | None = None
 
 
 class CreatedTicket(BaseModel):

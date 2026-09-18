@@ -6,6 +6,8 @@
 
 from pydantic import BaseModel
 
+from core.models import Finding
+
 
 class SonarToJiraInput(BaseModel):
     project_key: str
@@ -60,3 +62,8 @@ class SonarToJiraInput(BaseModel):
     # This model never re-resolves the two itself; by the time it's built,
     # that decision has already been made once, client-side.
     ticket_cap: int | None = None
+
+    # Findings already computed host-side, threaded straight through to
+    # FetchFindingsInput - see that model's own docstring for why (a
+    # scanner with no server to query remotely, e.g. local Semgrep).
+    pre_fetched_findings: list[Finding] | None = None

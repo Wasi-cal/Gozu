@@ -27,7 +27,7 @@ def jira_env(monkeypatch):
     monkeypatch.setenv("JIRA_PROJECT_KEY", "PROJ")
 
 
-def make_input() -> ScreenshotAttachInput:
+def make_input(source_tool: str = "sonarqube") -> ScreenshotAttachInput:
     return ScreenshotAttachInput(
         finding=Finding(
             key="ABC-1",
@@ -38,7 +38,7 @@ def make_input() -> ScreenshotAttachInput:
             message="some message",
             finding_type="vulnerability",
             deep_link="http://localhost:9090/project/issues?id=proj",
-            source_tool="sonarqube",
+            source_tool=source_tool,
         ),
         ticket_key="PROJ-1",
     )
@@ -123,6 +123,16 @@ async def test_activity_propagates_real_add_comment_error():
         RuntimeError, match="jira down"
     ):
         await capture_and_attach_screenshot_activity(make_input())
+
+
+async def test_activity_attaches_snippet_for_non_sonarqube_finding_too():
+    """render_finding_snippet() isn't SonarQube-only - a Semgrep finding with its own captured snippet still gets one."""
+    client = MagicMock()
+    with patched_render(), patch(f"{MODULE}.get_ticket_client", return_value=client):
+        await capture_and_attach_screenshot_activity(make_input(source_tool="semgrep"))
+
+    client.attach_screenshot.assert_called_once()
+    client.add_comment.assert_called_once_with("PROJ-1", "some message")
 
 
 async def test_activity_cleans_up_temp_dir_after_successful_attach():
