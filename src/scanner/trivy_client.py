@@ -87,7 +87,7 @@ def _build_finding(vuln: dict, target: str) -> Finding:
 
     return Finding(
         key=f"{vulnerability_id}|{pkg_name}|{target}",
-        title=f"{vulnerability_id}: {title} ({pkg_name})",
+        title=f"{vulnerability_id}: {title} ({pkg_name})" if title != vulnerability_id else f"{vulnerability_id} ({pkg_name})",
         severity=_map_trivy_severity(vuln.get("Severity")),
         component=target,
         line=None,

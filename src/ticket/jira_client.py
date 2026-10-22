@@ -16,7 +16,7 @@ from temporalio import activity
 
 from core.errors import TicketAuthError, TicketValidationError
 from core.models import Finding, Severity
-from ticket.AtlassianDocumentFormat import bullet_list, code_block, doc, paragraph
+from ticket.AtlassianDocumentFormat import bullet_list, code_block, doc, expand, heading, paragraph, summarize
 from ticket.TicketClient import (
     DEFAULT_PRIORITY,
     SEVERITY_TO_PRIORITY,
@@ -43,6 +43,20 @@ _DESCRIPTION_TEXT_MAX_CHARS = 10000
 
 def _truncate(text: str, limit: int = _DESCRIPTION_TEXT_MAX_CHARS) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _recommended_action(finding: Finding) -> str | None:
+    """One plain-language next step. Branches on package_name, never source_tool, like _build_description()."""
+    if finding.package_name:
+        if finding.fixed_version:
+            return f"Upgrade {finding.package_name} from {finding.installed_version} to {finding.fixed_version} or later."
+        return (
+            f"No fixed version of {finding.package_name} is available yet. "
+            "Track the advisory and apply a mitigation until one is released."
+        )
+    if finding.line is not None:
+        return f"Review {finding.component} at line {finding.line}."
+    return None
 
 # Exact names a Jira admin gives these OPTIONAL custom fields (see README.md's
 # Jira setup section) for discover_custom_fields() to find them - unset,
@@ -174,13 +188,19 @@ class JiraClient(TicketClient):
         ]
         # llm_explanation, when present, replaces the raw message with an
         # LLM-generated explanation + suggested fix.
-        content = [paragraph(_truncate(finding.llm_explanation or finding.message)), bullet_list(details)]
+        short, full = summarize(finding.llm_explanation or finding.message)
+        content = [paragraph(short)]
+        if full:
+            content.append(expand("Full description", paragraph(_truncate(full))))
+        content += [heading("Details"), bullet_list(details)]
+        action = _recommended_action(finding)
+        if action:
+            content += [heading("Recommended action"), paragraph(action)]
         if finding.how_to_fix:
             # Rule-level guidance, not tailored to this line. code_block()
             # keeps SonarQube's prose+code rule descriptions legible after
             # src/scanner/html_text.py strips the original HTML formatting.
-            content.append(paragraph("How to fix:"))
-            content.append(code_block(_truncate(finding.how_to_fix)))
+            content += [heading("How to fix"), code_block(_truncate(finding.how_to_fix))]
         return doc(*content)
 
     def discover_custom_fields(self, names: list[str]) -> dict[str, str]:

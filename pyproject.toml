@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gozu"
-version = "0.3.9"
+version = "0.3.10"
 description = "Scan code with a pluggable choice of scanners (currently SonarQube, Trivy, and Semgrep) and auto-create tickets in a pluggable choice of ticket-tracking backends (currently Jira), orchestrated with Temporal."
 readme = "README.md"
 requires-python = ">=3.12"
