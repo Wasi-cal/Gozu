@@ -50,7 +50,7 @@ from config.connection import env_settings
 
 def _build_alembic_config(stack_dir: Path) -> tuple[Config, str]:
     cfg = Config(str(stack_dir / "alembic.ini"))
-    cfg.set_main_option("script_location", str(stack_dir / "migrations"))
+    cfg.set_main_option("script_location", str(stack_dir / "db" / "migrations"))
 
     settings = env_settings()
     url = (

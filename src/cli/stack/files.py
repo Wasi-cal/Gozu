@@ -40,6 +40,7 @@ _STATIC_FILES = [
     "pyproject.toml",
     "uv.lock",
     "alembic.ini",
+    "README.md",
 ]
 
 # db/ is copied as a whole tree, like _SOURCE_PACKAGES below, so a future
