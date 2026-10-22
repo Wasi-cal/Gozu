@@ -35,6 +35,15 @@ ROLLUP_LABEL = "gozu-backlog-rollup"
 # before summarizing the rest, so a large backlog stays readable.
 _ROLLUP_DESCRIPTION_MAX_LINES = 50
 
+# Jira rejects a description over 32,767 characters outright (400), and a
+# single finding's text can exceed that on its own (e.g. a long Trivy CVE
+# description) - each free-text block is capped well under it.
+_DESCRIPTION_TEXT_MAX_CHARS = 10000
+
+
+def _truncate(text: str, limit: int = _DESCRIPTION_TEXT_MAX_CHARS) -> str:
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
 # Exact names a Jira admin gives these OPTIONAL custom fields (see README.md's
 # Jira setup section) for discover_custom_fields() to find them - unset,
 # Component/Line/Severity stay embedded in Description text instead.
@@ -165,13 +174,13 @@ class JiraClient(TicketClient):
         ]
         # llm_explanation, when present, replaces the raw message with an
         # LLM-generated explanation + suggested fix.
-        content = [paragraph(finding.llm_explanation or finding.message), bullet_list(details)]
+        content = [paragraph(_truncate(finding.llm_explanation or finding.message)), bullet_list(details)]
         if finding.how_to_fix:
             # Rule-level guidance, not tailored to this line. code_block()
             # keeps SonarQube's prose+code rule descriptions legible after
             # src/scanner/html_text.py strips the original HTML formatting.
             content.append(paragraph("How to fix:"))
-            content.append(code_block(finding.how_to_fix))
+            content.append(code_block(_truncate(finding.how_to_fix)))
         return doc(*content)
 
     def discover_custom_fields(self, names: list[str]) -> dict[str, str]:
