@@ -33,6 +33,7 @@ path already has for its one implicit branch.
 """
 
 import json
+import re
 import subprocess
 
 from core.errors import ScannerExecutionError
@@ -62,6 +63,20 @@ def _map_trivy_severity(raw_severity: str | None) -> Severity:
     return DEFAULT_TRIVY_SEVERITY
 
 
+def _readable_title(vulnerability_id: str, pkg_name: str, title: str | None) -> str:
+    """"CVE-2026-1234 | pillow | Denial of Service ..." - Trivy's own titles often start with a repeated "pkg: " prefix, which is stripped so the package only shows once."""
+    text = title or ""
+    while True:
+        stripped = re.sub(rf"^{re.escape(pkg_name)}\s*:\s*", "", text, flags=re.IGNORECASE)
+        if stripped == text:
+            break
+        text = stripped
+    parts = [vulnerability_id, pkg_name]
+    if text and text != vulnerability_id:
+        parts.append(text)
+    return " | ".join(parts)
+
+
 def _build_finding(vuln: dict, target: str) -> Finding:
     """
     One Trivy `Vulnerabilities[]` entry -> one normalized Finding. `key` is
@@ -87,7 +102,7 @@ def _build_finding(vuln: dict, target: str) -> Finding:
 
     return Finding(
         key=f"{vulnerability_id}|{pkg_name}|{target}",
-        title=f"{vulnerability_id}: {title} ({pkg_name})" if title != vulnerability_id else f"{vulnerability_id} ({pkg_name})",
+        title=_readable_title(vulnerability_id, pkg_name, vuln.get("Title")),
         severity=_map_trivy_severity(vuln.get("Severity")),
         component=target,
         line=None,
